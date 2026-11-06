@@ -1,0 +1,17 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16        # PostgreSQL 16 with pgvector included
+    container_name: screening_db
+    environment:
+      POSTGRES_USER: loop
+      POSTGRES_PASSWORD: loop_dev_password
+      POSTGRES_DB: screening_care_loop
+      TZ: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db:/docker-entrypoint-initdb.d   # runs 01_schema.sql then 02_seed.sql on FIRST start only
+
+volumes:
+  pgdata:
