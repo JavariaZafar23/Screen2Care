@@ -55,11 +55,12 @@ function updateVisibility() {
   show("hrt-years", hrtAge && val("hrt_use") === "Yes");
 
   show("radiation", val("chest_radiation") === "Yes");
-  const positive = val("genetic_status") === "Positive";
-  show("gene", positive);
-  $("genetic_gene").required = positive;
-  show("gene-other", positive && val("genetic_gene") === "Other");
-  $("genetic_gene_other").required = positive && val("genetic_gene") === "Other";
+  const geneticStatus = val("genetic_status");
+  const geneticResult = ["Positive", "Negative"].includes(geneticStatus);
+  show("gene", geneticResult);
+  $("genetic_gene").required = geneticStatus === "Positive";
+  show("gene-other", geneticStatus === "Positive" && val("genetic_gene") === "Other");
+  $("genetic_gene_other").required = geneticStatus === "Positive" && val("genetic_gene") === "Other";
 
   const geriatric = a !== null && a >= 75;
   $("geriatric").hidden = !geriatric;
@@ -67,7 +68,6 @@ function updateVisibility() {
     $(id).required = geriatric;
     if (!geriatric) $(id).value = "";
   });
-  if (!geriatric) $("geriatric_life").value = "";
 
   const mh = $("medical_history_yes").checked;
   $("medical_history_details_field").hidden = !mh;
@@ -106,7 +106,7 @@ function addBreastEntry(data = {}) {
   const row = document.createElement("div");
   row.className = "repeat-row";
   row.innerHTML = `
-    <label class="field">Type <select data-field="type" required>
+    <label class="field compact-field">Type <select data-field="type" required>
       <option value="">Select…</option><option>None</option><option>Biopsy</option><option>Lumpectomy</option>
       <option>Cyst Aspiration</option><option>Implants</option></select></label>
     <label class="field grow" data-details>Details / pathology findings
@@ -134,10 +134,13 @@ function addFamily() {
     <label class="field">Relation <input data-field="relation" type="text" required maxlength="30" placeholder="e.g. Mother, sister, aunt"></label>
     <label class="field">Cancer type <select data-field="cancer_type" required>
       <option value="">Select…</option><option>Breast</option><option>Ovarian</option><option>Pancreatic</option><option>Prostate</option><option>Other</option></select></label>
-    <label class="field">Age at diagnosis <input data-field="age_at_diagnosis" data-int type="number" min="1" max="120" required></label>
-    <label class="field">Known genetic mutation <select data-field="known_genetic_mutations" required>
+    <label class="field narrow-field">Age at diagnosis <input data-field="age_at_diagnosis" data-int type="number" min="1" max="120" required></label>
+    <label class="field narrow-field">Known genetic mutation <select data-field="known_genetic_mutations" required>
       <option value="">Select…</option><option>BRCA1</option><option>BRCA2</option><option>Negative</option><option>Unknown</option></select></label>
     <button type="button" class="remove" aria-label="Remove this relative">Remove</button>`;
+  row.querySelectorAll('[data-field="cancer_type"] option').forEach((option) => {
+    if (["Pancreatic", "Prostate", "Other"].includes(option.textContent)) option.remove();
+  });
   return removable(row, "family_entries");
 }
 
@@ -157,6 +160,9 @@ function addImaging() {
       <option value="2">2 Benign</option><option value="3">3 Probably benign</option><option value="4">4 Suspicious</option>
       <option value="5">5 Highly suggestive</option><option value="6">6 Known cancer</option></select></label>
     <button type="button" class="remove" aria-label="Remove this scan">Remove</button>`;
+  row.querySelector('[data-field="birads"] option[value="0"]')?.remove();
+  row.querySelector('[data-field="birads"] option[value="6"]')?.remove();
+  row.querySelector('[data-field="birads"]')?.closest(".field")?.classList.add("birads-field");
   const modality = row.querySelector('[data-field="modality"]');
   const sync = () => {
     const none = ["MRI", "Ultrasound"].includes(modality.value);
@@ -195,7 +201,6 @@ const exam = (s) => ({
 function payload() {
   const pres = radio("presentation");
   const married = val("marital_status") === "Married";
-  const life = val("geriatric_life");
   const family = rows("family_entries").map((r) => ({ ...r, family_side: "Unknown side" }));
   return {
     patient_id: val("patient_pick"), evaluation_date: val("evaluation_date"),
@@ -218,7 +223,7 @@ function payload() {
     genetic_status: val("genetic_status"), genetic_gene: val("genetic_gene"), genetic_gene_other: val("genetic_gene_other"),
     geriatric_end_stage_failure: val("geriatric_end_stage_failure"),
     geriatric_adl_independent: val("geriatric_adl_independent"),
-    geriatric_life_expectancy_over_10y: life === null ? null : life === "true",
+    geriatric_life_expectancy_over_10y: null,
     family_history: family, family_history_none: $("family_history_none").checked,
     cbe_right: exam("r"), cbe_left: exam("l"),
     imaging: rows("imaging_entries"), imaging_not_done: $("imaging_not_done").checked,
@@ -261,6 +266,7 @@ function buildChecks(p) {
 
 function renderChecks() {
   const list = $("checks_list");
+  if (!list) return;
   const items = buildChecks(payload());
   list.replaceChildren();
   if (!items.length) { list.innerHTML = '<li class="empty">No issues found.</li>'; return; }
@@ -376,15 +382,6 @@ function resetForm() {
   showErrors([]);
   refresh();
 }
-$("new_intake").addEventListener("click", () => { $("saved_dialog").close(); resetForm(); window.scrollTo(0, 0); });
-
-// ---------- Find an existing patient ----------
-const lookup = $("patient_lookup");
-$("open_lookup").addEventListener("click", () => { $("lookup_message").hidden = true; lookup.showModal(); $("lookup_patient_id").focus(); });
-$("cancel_lookup").addEventListener("click", () => lookup.close());
-$("lookup_patient_id").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); findPatient(); } });
-$("find_patient").addEventListener("click", findPatient);
-
 const PRETTY = (k) => k.replaceAll("_", " ").replace(/^\w/, (c) => c.toUpperCase());
 const HIDE = new Set(["idempotency_key", "full_name", "date_of_birth", "phone", "national_id", "patient_id", "signed_date"]);
 function describe(v) {
@@ -434,6 +431,8 @@ async function loadPatient(id) {
   return 200;
 }
 
+const lookup = $("patient_lookup");
+
 async function findPatient() {
   const id = val("lookup_patient_id");
   const msg = $("lookup_message");
@@ -465,4 +464,12 @@ $("evaluation_date").value = todayIso();
 $("signed_date").value = todayIso();
 refresh();
 const wanted = new URLSearchParams(location.search).get("patient");
-if (wanted) loadPatient(wanted).then((st) => { if (st !== 200) showErrors(["That patient could not be loaded. Choose one from the list."]); });
+if (wanted) {
+  loadPatient(wanted).then((st) => { if (st !== 200) showErrors(["That patient could not be loaded. Choose one from the list."]); });
+} else {
+  $("cancel_lookup").addEventListener("click", () => { lookup.close(); window.location.href = "/"; });
+  $("lookup_patient_id").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); findPatient(); } });
+  $("find_patient").addEventListener("click", findPatient);
+  lookup.showModal();
+  $("lookup_patient_id").focus();
+}

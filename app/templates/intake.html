@@ -1,16 +1,13 @@
 {% extends "base.html" %}
 {% from "_ui.html" import icon %}
 {% block title %}Clinical intake{% endblock %}
-{% block head %}<link rel="stylesheet" href="{{ url_for('static', path='intake.css') }}?v=3">{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', path='intake.css') }}?v=7">{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
     <a class="crumb" href="/">{{ icon('back') }} Dashboard</a>
     <h1>Breast screening clinical proforma</h1>
     <p>For a patient registered at the front desk. Record the history, examination and imaging report. A BI-RADS 4 or 5 result opens the care loop (biopsy) as soon as you save.</p>
-  </div>
-  <div class="actions-row">
-    <button class="btn btn-secondary" type="button" id="open_lookup">{{ icon('search') }} Find patient by ID</button>
   </div>
 </div>
 
@@ -29,7 +26,7 @@
 
 <div class="layout">
 <form id="intake" novalidate autocomplete="off">
-  <div class="form-intro"><strong>Before you begin.</strong> Fields marked <span class="req">required</span> must be filled in.
+  <div class="form-intro"><strong>Before you begin.</strong> Fields marked <span class="req">*</span> must be filled in.
     In the breast examination, use “Not answered” when an item was not assessed; it is never treated as normal.</div>
 
   <section id="previous_intakes" class="block history-block" hidden aria-labelledby="prev-h">
@@ -42,15 +39,9 @@
   <section id="s1" class="block">
     <h2><span class="num">1</span>Patient</h2>
     <p class="hint">Demographics are entered at registration. Ask the front desk to correct them if something is wrong.</p>
+    <select id="patient_pick" hidden></select>
     <div class="grid">
-      <label class="field span-2">Patient <span class="req">required</span>
-        <select id="patient_pick" required>
-          <option value="">Select a registered patient…</option>
-          {% for w in waiting %}<option value="{{ w.patient_id }}">{{ w.full_name }} · {{ w.patient_id }} (waiting)</option>{% endfor %}
-        </select>
-        <small>{% if waiting %}Patients the front desk sent to you are listed here. {% endif %}Use “Find patient by ID” for anyone else on your list.</small>
-      </label>
-      <label class="field">Evaluation date <span class="req">required</span>
+      <label class="field">Evaluation date <span class="req">*</span>
         <input id="evaluation_date" type="date" required>
       </label>
     </div>
@@ -68,9 +59,9 @@
   <section id="s2" class="block">
     <h2><span class="num">2</span>Chief complaint &amp; presenting symptoms</h2>
     <fieldset class="plain">
-      <legend>Presentation <span class="req">required</span></legend>
+      <legend>Presentation <span class="req">*</span></legend>
       <div class="choice-row big">
-        <label><input type="radio" name="presentation" value="false" required> Asymptomatic (routine screening)</label>
+        <label><input type="radio" name="presentation" value="false" required> Asymptomatic</label>
         <label><input type="radio" name="presentation" value="true"> Symptomatic</label>
       </div>
     </fieldset>
@@ -96,7 +87,7 @@
   <section id="s3" class="block">
     <h2><span class="num">3</span>Obstetric &amp; gynaecological history</h2>
     <div class="grid">
-      <label class="field">Marital status <span class="req">required</span>
+      <label class="field">Marital status <span class="req">*</span>
         <select id="marital_status" required><option value="">Select…</option><option>Married</option><option>Unmarried</option></select>
       </label>
       <label class="field">Age at menarche <input id="menarche_age" type="number" min="6" max="25"></label>
@@ -113,7 +104,7 @@
         <select id="hrt_use"><option value="">Not recorded</option><option>Yes</option><option>No</option><option>Unknown</option></select>
       </label>
       <label class="field" data-show="hrt-years">HRT duration (years) <input id="hrt_duration_years" type="number" min="0" max="60" step="0.5"></label>
-      <label class="field" data-show="married">Breastfed <span class="req">required</span>
+      <label class="field" data-show="married">Breastfed <span class="req">*</span>
         <select id="breastfeeding_history"><option value="">Select…</option><option>Yes</option><option>No</option><option>Unknown</option></select>
       </label>
       <label class="field" data-show="breastfed-years">Breastfeeding duration (years) <input id="breastfeeding_duration_years" type="number" min="0" max="30" step="0.5"></label>
@@ -127,29 +118,22 @@
     <h3>Breast history</h3>
     <div id="breast_history_entries" class="repeat-list"></div>
     <button type="button" class="add-btn" id="add_breast_entry">{{ icon('plus') }} Add breast history entry</button>
-    <div class="grid">
-      <label class="field">High-risk biopsy finding
-        <select id="high_risk_biopsy"><option value="">Not recorded</option><option>None</option><option>ADH</option><option>ALH</option><option>LCIS</option><option>Unknown</option></select>
-        <small>Atypical hyperplasia or LCIS puts the patient on the high-risk pathway</small>
-      </label>
-    </div>
-
     <h3>Medical history</h3>
     <label class="check-line"><input type="checkbox" id="medical_history_yes"> The patient has other medical history</label>
-    <label class="field" id="medical_history_details_field" hidden>Medical history details <span class="req">required</span>
+    <label class="field" id="medical_history_details_field" hidden>Medical history details <span class="req">*</span>
       <textarea id="medical_history_details" rows="3" maxlength="2000"></textarea>
     </label>
 
     <h3>Body measurements</h3>
     <div class="grid">
-      <label class="field">Height (cm) <span class="req">required</span> <input id="height_cm" type="number" min="100" max="230" step="0.1" required></label>
-      <label class="field">Weight (kg) <span class="req">required</span> <input id="weight_kg" type="number" min="25" max="300" step="0.1" required></label>
+      <label class="field">Height (cm) <span class="req">*</span> <input id="height_cm" type="number" min="100" max="230" step="0.1" required></label>
+      <label class="field">Weight (kg) <span class="req">*</span> <input id="weight_kg" type="number" min="25" max="300" step="0.1" required></label>
       <div class="field">Calculated BMI <output id="bmi_out" class="derived">—</output></div>
     </div>
 
     <h3>Chest radiation history</h3>
     <div class="grid">
-      <label class="field">Chest radiation <span class="req">required</span>
+      <label class="field">Chest radiation <span class="req">*</span>
         <select id="chest_radiation" required><option value="">Select…</option><option>No</option><option>Yes</option><option>Unknown</option></select>
       </label>
       <label class="field" data-show="radiation">Age at radiation <input id="chest_radiation_age" type="number" min="1" max="100"></label>
@@ -158,10 +142,10 @@
 
     <h3>Genetic history</h3>
     <div class="grid">
-      <label class="field">Genetic test status <span class="req">required</span>
+      <label class="field">Genetic test status <span class="req">*</span>
         <select id="genetic_status" required><option value="">Select…</option><option>Never tested</option><option>Negative</option><option>Positive</option></select>
       </label>
-      <label class="field" data-show="gene">Gene <span class="req">required</span>
+      <label class="field" data-show="gene">Gene <span class="req">*</span>
         <select id="genetic_gene"><option value="">Select…</option><option>BRCA1</option><option>BRCA2</option><option>TP53</option><option>PTEN</option><option>PALB2</option><option>Other</option></select>
       </label>
       <label class="field" data-show="gene-other">Other gene <input id="genetic_gene_other" type="text" maxlength="30"></label>
@@ -170,14 +154,11 @@
     <fieldset id="geriatric" class="sub" hidden>
       <legend>Geriatric assessment (age 75 or over)</legend>
       <div class="grid">
-        <label class="field">Active end-stage organ failure or advanced dementia? <span class="req">required</span>
+        <label class="field geriatric-question"><span class="question-label">Active end-stage organ failure or advanced dementia? <span class="req">*</span></span>
           <select id="geriatric_end_stage_failure"><option value="">Select…</option><option>Yes</option><option>No</option></select>
         </label>
-        <label class="field">Fully independent in daily living activities (ADLs)? <span class="req">required</span>
+        <label class="field geriatric-question"><span class="question-label">Fully independent in daily living activities (ADLs)? <span class="req">*</span></span>
           <select id="geriatric_adl_independent"><option value="">Select…</option><option>Yes</option><option>No</option></select>
-        </label>
-        <label class="field">Life expectancy over 10 years? <small>clinician judgement</small>
-          <select id="geriatric_life"><option value="">Not assessed yet</option><option value="true">Yes</option><option value="false">No</option></select>
         </label>
       </div>
     </fieldset>
@@ -271,7 +252,7 @@
     </label>
     <div class="grid">
       <div class="field">Examiner <output class="derived">{{ user.name }}</output><small>The logged-in clinician signs the form</small></div>
-      <label class="field">Date signed <span class="req">required</span> <input id="signed_date" type="date" required></label>
+      <label class="field">Date signed <span class="req">*</span> <input id="signed_date" type="date" required></label>
     </div>
   </section>
 
@@ -292,10 +273,6 @@
     <a href="#s7">7 Imaging</a>
     <a href="#s8">8 Plan</a>
   </nav>
-  <div class="checks">
-    <h2>Checks</h2>
-    <ul id="checks_list"><li class="empty">Issues appear here as you fill in the form.</li></ul>
-  </div>
 </aside>
 </div>
 
@@ -317,11 +294,10 @@
   <div class="dialog-actions">
     <a href="/" class="secondary">Dashboard</a>
     <a href="#" class="secondary" id="open_loop" hidden>Open care loop</a>
-    <button type="button" class="primary-btn" id="new_intake">Start a new intake</button>
   </div>
 </dialog>
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', path='intake.js') }}?v=3"></script>
+<script src="{{ url_for('static', path='intake.js') }}?v=12"></script>
 {% endblock %}
