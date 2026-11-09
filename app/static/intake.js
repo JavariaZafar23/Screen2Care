@@ -1,281 +1,444 @@
-// Breast screening intake form: conditional fields, live checks, submit
+// Breast screening clinical proforma (intake v2): conditional fields, repeat rows,
+// live checks, patient lookup and submit. Field rules follow app/schemas.py.
 const form = document.getElementById("intake");
 const $ = (id) => document.getElementById(id);
+const val = (id) => $(id)?.value.trim() || null;
+const num = (id) => (val(id) === null ? null : Number(val(id)));
 const radio = (name) => form.querySelector(`input[name="${name}"]:checked`)?.value ?? null;
-const checked = (name) => [...form.querySelectorAll(`input[name="${name}"]:checked`)].map((i) => i.value);
-const num = (id) => ($(id).value === "" ? null : Number($(id).value));
-const str = (id) => $(id).value.trim() || null;
-const yesNo = (name) => (radio(name) === null ? null : radio(name) === "yes");
+const show = (key, on) => form.querySelectorAll(`[data-show="${key}"]`).forEach((el) => {
+  el.hidden = !on;
+  if (!on) el.querySelectorAll("input, select").forEach((c) => { c.value = ""; });
+});
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
-$("evaluation_date").value = todayIso();
+const todayIso = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+let idempotencyKey = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random();
 
 // ---------- Derived values ----------
-function ageAt(dobIso, onIso) {
-  if (!dobIso || !onIso) return null;
-  const d = new Date(dobIso), e = new Date(onIso);
+function age() {
+  const dob = val("date_of_birth"), on = val("evaluation_date");
+  if (!dob || !on) return null;
+  const d = new Date(dob), e = new Date(on);
   let a = e.getFullYear() - d.getFullYear();
   if (e.getMonth() < d.getMonth() || (e.getMonth() === d.getMonth() && e.getDate() < d.getDate())) a--;
   return a >= 0 && a < 130 ? a : null;
 }
-const currentAge = () => ageAt($("date_of_birth").value, $("evaluation_date").value);
-
 function bmi() {
   const h = num("height_cm"), w = num("weight_kg");
-  return h && w ? Math.round((w / (h / 100) ** 2) * 10) / 10 : null;
+  return h && w ? (w / (h / 100) ** 2).toFixed(1) : null;
 }
 
 // ---------- Show / hide dependent fields ----------
 function updateVisibility() {
-  const age = currentAge();
-  $("age_out").textContent = age ?? "—";
+  const a = age();
+  $("age_out").textContent = a ?? "—";
   $("bmi_out").textContent = bmi() ?? "—";
 
-  $("symptoms").hidden = radio("presentation") !== "symptomatic";
-  $("menopause_age_wrap").hidden = radio("menopausal_status") !== "Postmenopausal";
-  $("hrt_duration_wrap").hidden = radio("hrt") !== "yes";
-  $("ovarian_rel_wrap").hidden = radio("ovarian") !== "yes";
-  $("geriatric").hidden = !(age !== null && age >= 75);
+  const symptomatic = radio("presentation") === "true";
+  $("symptoms").hidden = !symptomatic;
+  if (!symptomatic) ["lump_side", "nipple_discharge_side", "pain_type"].forEach((id) => { $(id).value = ""; });
+  show("lump", symptomatic && !!val("lump_side"));
+  show("discharge", symptomatic && !!val("nipple_discharge_side"));
+  show("pain", symptomatic && !!val("pain_type"));
 
-  const prior = checked("prior");
-  $("prior_details_wrap").hidden = prior.length === 0;
+  const married = val("marital_status") === "Married";
+  show("married", married);
+  $("breastfeeding_history").required = married;
+  show("breastfed-years", married && val("breastfeeding_history") === "Yes");
+  show("menopause-status", a !== null && a >= 40);
+  show("menopause-age", a !== null && a >= 40 && val("menopausal_status") === "Postmenopausal");
+  const hrtAge = a !== null && a >= 45 && a <= 55;
+  show("hrt", hrtAge);
+  show("hrt-years", hrtAge && val("hrt_use") === "Yes");
 
-  form.querySelectorAll(".relative").forEach((row) => {
-    row.querySelector(".age").hidden = !row.querySelector("input[type=checkbox]").checked;
+  show("radiation", val("chest_radiation") === "Yes");
+  const positive = val("genetic_status") === "Positive";
+  show("gene", positive);
+  $("genetic_gene").required = positive;
+  show("gene-other", positive && val("genetic_gene") === "Other");
+  $("genetic_gene_other").required = positive && val("genetic_gene") === "Other";
+
+  const geriatric = a !== null && a >= 75;
+  $("geriatric").hidden = !geriatric;
+  ["geriatric_end_stage_failure", "geriatric_adl_independent"].forEach((id) => {
+    $(id).required = geriatric;
+    if (!geriatric) $(id).value = "";
   });
+  if (!geriatric) $("geriatric_life").value = "";
 
-  for (const s of ["R", "L"]) {
-    $(`cbe_${s}_insp_text`).hidden = radio(`cbe_${s}_insp`) !== "abnormal";
-    const mass = radio(`cbe_${s}_mass`) === "yes";
-    $(`cbe_${s}_details`).hidden = !mass;
-    $(`cbe_${s}_nodetail`).hidden = mass;
+  const mh = $("medical_history_yes").checked;
+  $("medical_history_details_field").hidden = !mh;
+  $("medical_history_details").required = mh;
+  if (!mh) $("medical_history_details").value = "";
+
+  const noFamily = $("family_history_none").checked;
+  $("family_entries").hidden = noFamily;
+  $("add_family").hidden = noFamily;
+  const noImaging = $("imaging_not_done").checked;
+  $("imaging_entries").hidden = noImaging;
+  $("add_imaging").hidden = noImaging;
+
+  for (const s of ["r", "l"]) {
+    const insp = val(`${s}_inspection`) === "Abnormal";
+    $(`${s}_inspection_more`).hidden = !insp;
+    $(`${s}_inspection_finding`).required = insp;
+    if (!insp) [`${s}_inspection_finding`, `${s}_nipple_discharge_color`, `${s}_skin_change`].forEach((id) => { $(id).value = ""; });
+    const mass = val(`${s}_mass`) === "Abnormal";
+    $(`${s}_mass_more`).hidden = !mass;
+    $(`${s}_mass_size`).required = mass;
+    if (!mass) [`${s}_mass_size`, `${s}_mass_mobility`, `${s}_mass_consistency`].forEach((id) => { $(id).value = ""; });
   }
-  $("fu_wrap").hidden = radio("disposition") !== "ShortTermFollowUp";
+  $("followup_wrap").hidden = !planChosen().includes("Short-Term Diagnostic Follow-up (Repeat Imaging at strict 6-Month mark)");
 }
 
-// "None" and the procedure boxes exclude each other
-$("prior_none").addEventListener("change", (e) => {
-  if (e.target.checked) form.querySelectorAll('input[name="prior"]').forEach((i) => (i.checked = false));
-});
-form.querySelectorAll('input[name="prior"]').forEach((i) =>
-  i.addEventListener("change", () => { if (i.checked) $("prior_none").checked = false; })
-);
-
-$("clear_birads").addEventListener("click", () => {
-  form.querySelectorAll('input[name="birads"]').forEach((i) => (i.checked = false));
-  refresh();
-});
-
-// ---------- Live checks (guidance only; the rules engine makes the routing decision) ----------
-function cbeAbnormal() {
-  return ["R", "L"].some((s) =>
-    radio(`cbe_${s}_insp`) === "abnormal" || radio(`cbe_${s}_mass`) === "yes" || radio(`cbe_${s}_node`) === "yes");
+// ---------- Repeat rows ----------
+function removable(row, list) {
+  row.querySelector(".remove").addEventListener("click", () => { row.remove(); refresh(); });
+  $(list).appendChild(row);
+  row.querySelector("input, select")?.focus();
+  return row;
 }
 
-function buildChecks() {
+function addBreastEntry(data = {}) {
+  const row = document.createElement("div");
+  row.className = "repeat-row";
+  row.innerHTML = `
+    <label class="field">Type <select data-field="type" required>
+      <option value="">Select…</option><option>None</option><option>Biopsy</option><option>Lumpectomy</option>
+      <option>Cyst Aspiration</option><option>Implants</option></select></label>
+    <label class="field grow" data-details>Details / pathology findings
+      <input data-field="details" type="text" maxlength="200" placeholder="e.g. benign fibroadenoma, left, 2015"></label>
+    <button type="button" class="remove" aria-label="Remove this entry">Remove</button>`;
+  const type = row.querySelector('[data-field="type"]');
+  const sync = () => {
+    const has = type.value && type.value !== "None";
+    row.querySelector("[data-details]").hidden = !has;
+    if (!has) row.querySelector('[data-field="details"]').value = "";
+  };
+  type.addEventListener("change", sync);
+  type.value = data.type || "";
+  row.querySelector('[data-field="details"]').value = data.details || "";
+  sync();
+  return removable(row, "breast_history_entries");
+}
+
+function addFamily() {
+  const row = document.createElement("div");
+  row.className = "repeat-row";
+  row.innerHTML = `
+    <label class="field">Blood relative <select data-field="relation_degree" data-int required>
+      <option value="">Select…</option><option value="1">First degree</option><option value="2">Second degree</option></select></label>
+    <label class="field">Relation <input data-field="relation" type="text" required maxlength="30" placeholder="e.g. Mother, sister, aunt"></label>
+    <label class="field">Cancer type <select data-field="cancer_type" required>
+      <option value="">Select…</option><option>Breast</option><option>Ovarian</option><option>Pancreatic</option><option>Prostate</option><option>Other</option></select></label>
+    <label class="field">Age at diagnosis <input data-field="age_at_diagnosis" data-int type="number" min="1" max="120" required></label>
+    <label class="field">Known genetic mutation <select data-field="known_genetic_mutations" required>
+      <option value="">Select…</option><option>BRCA1</option><option>BRCA2</option><option>Negative</option><option>Unknown</option></select></label>
+    <button type="button" class="remove" aria-label="Remove this relative">Remove</button>`;
+  return removable(row, "family_entries");
+}
+
+function addImaging() {
+  const row = document.createElement("div");
+  row.className = "repeat-row";
+  row.innerHTML = `
+    <label class="field">Scan date <input data-field="date" type="date" required></label>
+    <label class="field">Modality <select data-field="modality" required>
+      <option value="Mammogram">Mammogram</option><option value="DBT">DBT (3D mammogram)</option>
+      <option value="Ultrasound">Ultrasound</option><option value="MRI">MRI</option></select></label>
+    <label class="field" data-density>Density <select data-field="density">
+      <option value="">Not recorded</option><option value="A">A (fatty)</option><option value="B">B (scattered)</option>
+      <option value="C">C (heterogeneously dense)</option><option value="D">D (extremely dense)</option></select></label>
+    <label class="field">BI-RADS <select data-field="birads" data-int required>
+      <option value="">Select…</option><option value="0">0 Incomplete</option><option value="1">1 Negative</option>
+      <option value="2">2 Benign</option><option value="3">3 Probably benign</option><option value="4">4 Suspicious</option>
+      <option value="5">5 Highly suggestive</option><option value="6">6 Known cancer</option></select></label>
+    <button type="button" class="remove" aria-label="Remove this scan">Remove</button>`;
+  const modality = row.querySelector('[data-field="modality"]');
+  const sync = () => {
+    const none = ["MRI", "Ultrasound"].includes(modality.value);
+    row.querySelector("[data-density]").hidden = none;
+    if (none) row.querySelector('[data-field="density"]').value = "";
+  };
+  modality.addEventListener("change", sync);
+  row.querySelector('[data-field="date"]').value = val("evaluation_date") || todayIso();
+  sync();
+  return removable(row, "imaging_entries");
+}
+
+function rows(list) {
+  return [...$(list).children].map((row) => Object.fromEntries(
+    [...row.querySelectorAll("[data-field]")]
+      .filter((el) => !el.closest("[hidden]"))
+      .map((el) => [el.dataset.field, el.value === "" ? null : (el.hasAttribute("data-int") ? Number(el.value) : el.value)])));
+}
+
+$("add_breast_entry").addEventListener("click", () => { addBreastEntry(); refresh(); });
+$("add_family").addEventListener("click", () => { addFamily(); refresh(); });
+$("add_imaging").addEventListener("click", () => { addImaging(); refresh(); });
+$("family_history_none").addEventListener("change", (e) => { if (e.target.checked) $("family_entries").replaceChildren(); });
+$("imaging_not_done").addEventListener("change", (e) => { if (e.target.checked) $("imaging_entries").replaceChildren(); });
+
+// ---------- Payload ----------
+const planChosen = () => [...form.querySelectorAll('input[name="plan"]:checked')].map((i) => i.value);
+const exam = (s) => ({
+  inspection: val(`${s}_inspection`), inspection_finding: val(`${s}_inspection_finding`),
+  nipple_discharge_color: val(`${s}_nipple_discharge_color`), skin_change: val(`${s}_skin_change`),
+  mass: val(`${s}_mass`), mass_size_mm: num(`${s}_mass_size`),
+  mass_mobility: val(`${s}_mass_mobility`), mass_consistency: val(`${s}_mass_consistency`),
+  axillary_nodes: val(`${s}_nodes`),
+});
+
+function payload() {
+  const pres = radio("presentation");
+  const married = val("marital_status") === "Married";
+  const life = val("geriatric_life");
+  const family = rows("family_entries").map((r) => ({ ...r, family_side: "Unknown side" }));
+  return {
+    full_name: val("full_name"), date_of_birth: val("date_of_birth"),
+    patient_id: val("patient_id")?.toUpperCase() ?? null, phone: val("phone"),
+    national_id: val("national_id"), evaluation_date: val("evaluation_date"),
+    idempotency_key: idempotencyKey,
+    presentation: pres === null ? null : pres === "true",
+    lump_side: val("lump_side"), lump_duration: val("lump_duration"),
+    nipple_discharge_side: val("nipple_discharge_side"), nipple_discharge_color: val("nipple_discharge_color"),
+    pain_type: val("pain_type"), pain_severity: num("pain_severity"),
+    marital_status: val("marital_status"), menarche_age: num("menarche_age"),
+    menopausal_status: val("menopausal_status"), menopause_age: num("menopause_age"),
+    parity: married ? num("parity") : null, age_first_birth: married ? num("age_first_birth") : null,
+    ocp_use: val("ocp_use"), hrt_use: val("hrt_use"), hrt_duration_years: num("hrt_duration_years"),
+    breastfeeding_history: married ? (val("breastfeeding_history") || "Unknown") : "Unknown",
+    breastfeeding_duration_years: married ? num("breastfeeding_duration_years") : null,
+    breast_history: rows("breast_history_entries"), high_risk_biopsy: val("high_risk_biopsy"),
+    medical_history_present: $("medical_history_yes").checked, medical_history_details: val("medical_history_details"),
+    height_cm: num("height_cm"), weight_kg: num("weight_kg"),
+    chest_radiation: val("chest_radiation"), chest_radiation_age: num("chest_radiation_age"),
+    chest_radiation_years: num("chest_radiation_years"),
+    genetic_status: val("genetic_status"), genetic_gene: val("genetic_gene"), genetic_gene_other: val("genetic_gene_other"),
+    geriatric_end_stage_failure: val("geriatric_end_stage_failure"),
+    geriatric_adl_independent: val("geriatric_adl_independent"),
+    geriatric_life_expectancy_over_10y: life === null ? null : life === "true",
+    family_history: family, family_history_none: $("family_history_none").checked,
+    cbe_right: exam("r"), cbe_left: exam("l"),
+    imaging: rows("imaging_entries"), imaging_not_done: $("imaging_not_done").checked,
+    plan: planChosen(), followup_months: num("followup_months"),
+    clinician_notes: val("clinician_notes"), examiner_name: val("examiner_name"), signed_date: val("signed_date"),
+  };
+}
+
+// ---------- Live checks (guidance only) ----------
+function buildChecks(p) {
   const out = [];
-  const age = currentAge();
-  const birads = radio("birads") === null ? null : Number(radio("birads"));
-  const disp = radio("disposition");
-  const density = radio("density");
-  const genetic = radio("genetic");
+  const a = age();
+  const plan = p.plan;
+  const has = (prefix) => plan.some((x) => x.startsWith(prefix));
+  const latest = [...p.imaging].filter((s) => s.date && s.birads !== null).sort((x, y) => (x.date < y.date ? 1 : -1))[0];
+  const anyBirads = (...v) => p.imaging.some((s) => v.includes(s.birads));
+  const abnormal = [p.cbe_right, p.cbe_left].some((e) => [e.inspection, e.mass, e.axillary_nodes].includes("Abnormal"));
 
-  if (radio("presentation") === "asymptomatic" && cbeAbnormal())
-    out.push(["warn", "The exam has abnormal findings but the visit is marked asymptomatic. If the patient has symptoms, mark it symptomatic so she follows the diagnostic pathway."]);
-  if (age !== null && age >= 75)
-    out.push(["info", "Age 75 or over: complete the geriatric assessment in section 4."]);
-  if (genetic === "BRCA1" || genetic === "BRCA2")
-    out.push(["info", `${genetic} mutation: the patient will be routed to the high-risk screening lane.`]);
-  if (radio("ovarian") === "yes" && !$("ovarian_relation").value)
-    out.push(["warn", "Select which relative had ovarian cancer."]);
-  if (birads !== null && checked("modality").length === 0)
-    out.push(["crit", "Select the imaging modality used for this BI-RADS result."]);
-  if (birads === 0)
-    out.push(["info", "BI-RADS 0: the patient needs recall for additional imaging before a final category."]);
-  if ((birads === 1 || birads === 2) && (density === "C" || density === "D"))
-    out.push(["info", `Density ${density}: tell the patient about dense tissue and discuss supplemental imaging.`]);
-  if ((birads === 4 || birads === 5) && disp !== "UrgentBiopsyReferral")
-    out.push(["crit", `BI-RADS ${birads} usually needs an urgent biopsy referral. Check the plan in section 7.`]);
-  if (birads === 3 && disp === "RoutineRescreen")
-    out.push(["warn", "BI-RADS 3 needs short-interval follow-up, not routine rescreening."]);
-  if ((birads === 1 || birads === 2) && disp === "UrgentBiopsyReferral")
-    out.push(["warn", `Urgent biopsy chosen for BI-RADS ${birads}. Confirm this is intended.`]);
+  if (p.presentation === false && abnormal)
+    out.push(["warn", "Abnormal clinical examination recorded for an asymptomatic presentation. If the patient has symptoms, mark the visit symptomatic."]);
+  if (anyBirads(4, 5, 6) && !has("Urgent Referral"))
+    out.push(["crit", "BI-RADS 4–6 normally requires an urgent biopsy referral. Check the plan in section 8."]);
+  if (anyBirads(3) && has("Routine Rescreening"))
+    out.push(["warn", "BI-RADS 3 generally needs short-term follow-up rather than routine rescreening."]);
+  if (p.imaging.some((s) => ["C", "D"].includes(s.density)) && has("Routine Rescreening"))
+    out.push(["warn", "Dense breast tissue may require supplemental imaging review."]);
+  if (latest?.birads === 0) out.push(["info", "Latest BI-RADS is 0: recall for additional imaging before a final category."]);
+  if (latest && [1, 2].includes(latest.birads) && has("Urgent Referral"))
+    out.push(["warn", `Urgent biopsy chosen while the latest BI-RADS is ${latest.birads}. Confirm this is intended.`]);
+  if (p.genetic_status === "Positive" && ["BRCA1", "BRCA2", "TP53", "PTEN"].includes(p.genetic_gene))
+    out.push(["info", `${p.genetic_gene} positive: the patient will be routed to the high-risk screening lane.`]);
+  if (p.chest_radiation === "Yes" && p.chest_radiation_age >= 10 && p.chest_radiation_age <= 30)
+    out.push(["info", "Chest radiation between ages 10 and 30: high-risk screening applies."]);
+  if (["ADH", "ALH", "LCIS"].includes(p.high_risk_biopsy))
+    out.push(["info", `${p.high_risk_biopsy} on a previous biopsy: high-risk screening from age 30.`]);
+  if (a !== null && a >= 75) out.push(["info", "Age 75 or over: complete the geriatric assessment in section 4."]);
+  if (!p.imaging_not_done && !p.imaging.length) out.push(["warn", "Add an imaging entry or tick “Imaging has not been done yet”."]);
   return out;
 }
 
 function renderChecks() {
   const list = $("checks_list");
-  const items = buildChecks();
-  list.innerHTML = "";
-  if (!items.length) {
-    list.innerHTML = '<li class="empty">No issues found.</li>';
-    return;
-  }
-  for (const [level, text] of items) {
+  const items = buildChecks(payload());
+  list.replaceChildren();
+  if (!items.length) { list.innerHTML = '<li class="empty">No issues found.</li>'; return; }
+  for (const [level, msg] of items) {
     const li = document.createElement("li");
-    li.className = level;
-    li.textContent = text;
-    list.appendChild(li);
+    li.className = level; li.textContent = msg; list.appendChild(li);
   }
 }
 
 function refresh() { updateVisibility(); renderChecks(); }
 form.addEventListener("input", refresh);
 form.addEventListener("change", refresh);
-refresh();
 
-// ---------- Build the payload ----------
-function cbeSide(s) {
-  const mass = radio(`cbe_${s}_mass`) === "yes";
-  return {
-    inspection_normal: radio(`cbe_${s}_insp`) !== "abnormal",
-    inspection_finding: str(`cbe_${s}_insp_text`),
-    mass_present: mass,
-    mass_size_mm: mass ? num(`cbe_${s}_size`) : null,
-    mass_mobility: mass ? radio(`cbe_${s}_mob`) : null,
-    mass_consistency: mass ? ($(`cbe_${s}_cons`).value || null) : null,
-    axillary_node_palpable: radio(`cbe_${s}_node`) === "yes",
-  };
-}
-
-function buildPayload() {
-  const relatives = [...form.querySelectorAll(".relative")]
-    .filter((r) => r.querySelector("input[type=checkbox]").checked)
-    .map((r) => {
-      const ageVal = r.querySelector(".age input").value;
-      return { relation: r.querySelector("input[type=checkbox]").value, age_at_diagnosis: ageVal ? Number(ageVal) : null };
-    });
-  const birads = radio("birads");
-  return {
-    full_name: str("full_name"),
-    date_of_birth: $("date_of_birth").value || null,
-    national_id: str("national_id"),
-    evaluation_date: $("evaluation_date").value || null,
-
-    is_symptomatic: radio("presentation") === "symptomatic",
-    lump_side: radio("lump_side") || null,
-    lump_duration: str("lump_duration"),
-    nipple_discharge_side: radio("nd_side") || null,
-    nipple_discharge_color: radio("nd_side") ? radio("nd_color") : null,
-    skin_changes: checked("skin"),
-    pain_type: radio("pain_type") || null,
-    pain_severity: radio("pain_type") ? num("pain_severity") : null,
-
-    menarche_age: num("menarche_age"),
-    menopausal_status: radio("menopausal_status"),
-    menopause_age: num("menopause_age"),
-    parity: num("parity"),
-    age_first_birth: num("age_first_birth"),
-    ocp_use: radio("ocp"),
-    hrt_use: yesNo("hrt"),
-    hrt_duration_years: num("hrt_duration_years"),
-
-    prior_breast_history: checked("prior"),
-    prior_breast_details: str("prior_breast_details"),
-    breast_cancer_relatives: relatives,
-    ovarian_cancer: radio("ovarian") === "yes",
-    ovarian_relation: $("ovarian_relation").value || null,
-    genetic_result: radio("genetic") || "Unknown",
-    height_cm: num("height_cm"),
-    weight_kg: num("weight_kg"),
-    geriatric_end_stage: yesNo("ger_end"),
-    geriatric_independent_adl: yesNo("ger_adl"),
-
-    cbe_right: cbeSide("R"),
-    cbe_left: cbeSide("L"),
-
-    modalities: checked("modality"),
-    density: radio("density"),
-    birads: birads === null ? null : Number(birads),
-
-    disposition: radio("disposition"),
-    followup_months: num("followup_months"),
-    examiner_name: str("examiner_name"),
-    signed_date: $("signed_date").value || null,
-  };
-}
-
-// ---------- Validate, submit, show result ----------
+// ---------- Validation and submit ----------
 function showErrors(messages) {
   const box = $("form_error");
-  if (!messages.length) { box.hidden = true; box.innerHTML = ""; return; }
-  box.innerHTML = "<ul>" + messages.map((m) => `<li>${m}</li>`).join("") + "</ul>";
-  box.hidden = false;
+  box.replaceChildren();
+  if (messages.length) {
+    const ul = document.createElement("ul");
+    messages.forEach((m) => { const li = document.createElement("li"); li.textContent = m; ul.appendChild(li); });
+    box.appendChild(ul);
+  }
+  box.hidden = !messages.length;
+}
+
+function labelOf(control) {
+  const legend = control.closest("fieldset")?.querySelector("legend");
+  if (legend && (control.type === "radio" || control.type === "checkbox")) return legend.textContent.replace(/required|select at least one/gi, "").trim();
+  if (control.getAttribute("aria-label")) return control.getAttribute("aria-label");
+  const label = control.closest("label");
+  return label ? label.childNodes[0].textContent.trim() : control.id;
 }
 
 function clientErrors(p) {
-  const errs = [];
-  form.querySelectorAll(".invalid").forEach((el) => el.classList.remove("invalid"));
-  const need = [["full_name", "Enter the patient’s full name."],
-                ["date_of_birth", "Enter the date of birth."],
-                ["evaluation_date", "Enter the date of evaluation."]];
-  for (const [id, msg] of need) if (!$(id).value.trim()) { errs.push(msg); $(id).classList.add("invalid"); }
-  const age = currentAge();
-  if (age !== null && age >= 75 && (p.geriatric_end_stage === null || p.geriatric_independent_adl === null))
-    errs.push("Answer both geriatric assessment questions (age 75 or over).");
-  if (p.birads !== null && !p.modalities.length) errs.push("Select the imaging modality for the BI-RADS result.");
-  if (p.disposition === "ShortTermFollowUp" && !p.followup_months) {
-    errs.push("Enter the follow-up interval in months."); $("followup_months").classList.add("invalid");
-  }
-  return errs;
+  $("imaging_not_done").setCustomValidity(!p.imaging_not_done && !p.imaging.length
+    ? "Add an imaging entry or tick 'Imaging has not been done yet'." : "");
+  form.querySelector('input[name="plan"]').setCustomValidity(p.plan.length ? "" : "Select a plan option.");
+  const bad = [...form.querySelectorAll("input, select, textarea")]
+    .filter((c) => !c.disabled && !c.closest("[hidden]") && !c.checkValidity());
+  form.querySelectorAll(".invalid").forEach((c) => c.classList.remove("invalid"));
+  bad.forEach((c) => c.classList.add("invalid"));
+  if (bad.length) { bad[0].scrollIntoView({ block: "center" }); bad[0].focus({ preventScroll: true }); }
+  const labels = [...new Set(bad.map(labelOf))];
+  return labels.length ? [`Please complete: ${labels.join(", ")}.`] : [];
 }
 
 function serverErrors(body) {
   if (Array.isArray(body?.detail))
     return body.detail.map((d) => {
-      const field = d.loc?.filter((x) => x !== "body").join(" › ");
+      const field = (d.loc || []).filter((x) => x !== "body").join(" › ").replaceAll("_", " ");
       const msg = (d.msg || "").replace(/^Value error, /, "");
-      return field ? `${field.replaceAll("_", " ")}: ${msg}` : msg;
+      return field ? `${field}: ${msg}` : msg;
     });
   return [body?.detail || "The intake could not be saved. Check the form and try again."];
 }
 
+function fillList(id, items, empty) {
+  const ul = $(id);
+  ul.replaceChildren();
+  (items.length ? items : [empty]).forEach((t) => { const li = document.createElement("li"); li.textContent = t; ul.appendChild(li); });
+}
+
+function showSaved(body) {
+  const risk = body.risk_assessment || {};
+  $("saved_text").textContent = body.duplicate
+    ? `This form was already saved for patient ${body.patient_id}. Nothing new was added.`
+    : body.returning_patient
+      ? `New visit added to patient ${body.patient_id}. Age on the evaluation date: ${body.age}.`
+      : `New patient created with ID ${body.patient_id}. Age on the evaluation date: ${body.age}.`;
+  $("risk_label").textContent = risk.label || risk.tier || "Not calculated";
+  $("risk_label").className = `risk-pill risk-${String(risk.tier || "incomplete").toLowerCase()}`;
+  $("risk_alert").textContent = risk.alert_trigger || "";
+  fillList("risk_reasons", risk.reasons || [], "No triggering factors recorded.");
+  fillList("doctor_plan", (body.doctor_plan || []).map((i) =>
+    i.option + (i.due_date ? ` — due ${i.due_date}` : "") + (i.recurrence ? ` (${i.recurrence})` : "")), "No plan selected.");
+  $("saved_lane").textContent = body.lane || "Not evaluated";
+  $("saved_dialog").showModal();
+}
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const payload = buildPayload();
-  const errs = clientErrors(payload);
+  const p = payload();
+  const errs = clientErrors(p);
   showErrors(errs);
   if (errs.length) return;
-
   const btn = $("save_btn");
-  btn.disabled = true;
-  btn.textContent = "Saving…";
+  btn.disabled = true; btn.textContent = "Saving…";
   try {
-    const res = await fetch("/api/intake", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const res = await fetch("/api/intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) { showErrors(serverErrors(body)); return; }
-    $("saved_text").textContent = body.returning_patient
-      ? `New visit added to existing patient ${body.patient_id}.`
-      : `New patient created with ID ${body.patient_id}.`;
-    $("saved_link").href = `/api/patients/${body.patient_id}`;
-    $("saved_dialog").showModal();
+    showSaved(body);
   } catch {
     showErrors(["The server could not be reached. Check that the app is running, then save again."]);
   } finally {
-    btn.disabled = false;
-    btn.textContent = "Save intake";
+    btn.disabled = false; btn.textContent = "Save intake";
   }
 });
 
-$("new_intake").addEventListener("click", () => {
-  $("saved_dialog").close();
+function resetForm() {
   form.reset();
+  ["breast_history_entries", "family_entries", "imaging_entries", "previous_intake_cards"].forEach((id) => $(id).replaceChildren());
+  $("previous_intakes").hidden = true;
   $("evaluation_date").value = todayIso();
+  $("signed_date").value = todayIso();
+  idempotencyKey = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random();
   showErrors([]);
   refresh();
-  window.scrollTo(0, 0);
-});
+}
+$("new_intake").addEventListener("click", () => { $("saved_dialog").close(); resetForm(); window.scrollTo(0, 0); });
 
-// Highlight the section in view
-const tocLinks = [...document.querySelectorAll(".toc a")];
-const observer = new IntersectionObserver((entries) => {
-  entries.forEach((en) => {
-    if (en.isIntersecting)
-      tocLinks.forEach((a) => a.classList.toggle("active", a.getAttribute("href") === `#${en.target.id}`));
+// ---------- Find an existing patient ----------
+const lookup = $("patient_lookup");
+$("open_lookup").addEventListener("click", () => { $("lookup_message").hidden = true; lookup.showModal(); $("lookup_patient_id").focus(); });
+$("cancel_lookup").addEventListener("click", () => lookup.close());
+$("lookup_patient_id").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); findPatient(); } });
+$("find_patient").addEventListener("click", findPatient);
+
+const PRETTY = (k) => k.replaceAll("_", " ").replace(/^\w/, (c) => c.toUpperCase());
+const HIDE = new Set(["idempotency_key", "full_name", "date_of_birth", "phone", "national_id", "patient_id", "signed_date"]);
+function describe(v) {
+  if (Array.isArray(v)) return v.map(describe).filter(Boolean).join("; ");
+  if (v && typeof v === "object") return Object.entries(v).filter(([, x]) => x !== null && x !== "" && x !== false)
+    .map(([k, x]) => `${PRETTY(k)}: ${describe(x)}`).join(", ");
+  return v === true ? "Yes" : String(v);
+}
+function renderHistory(history) {
+  const cards = $("previous_intake_cards");
+  cards.replaceChildren();
+  history.forEach((h) => {
+    const card = document.createElement("details");
+    card.className = "history-card";
+    const sum = document.createElement("summary");
+    sum.textContent = `Visit ${h.submitted?.evaluation_date || ""} · saved ${new Date(h.created_at).toLocaleString()}` + (h.tier ? ` · risk ${h.tier}` : "");
+    const dl = document.createElement("dl");
+    Object.entries(h.submitted || {}).forEach(([k, v]) => {
+      if (HIDE.has(k) || v === null || v === "" || v === false || (Array.isArray(v) && !v.length)) return;
+      const dt = document.createElement("dt"); dt.textContent = PRETTY(k);
+      const dd = document.createElement("dd"); dd.textContent = describe(v);
+      dl.append(dt, dd);
+    });
+    card.append(sum, dl);
+    cards.appendChild(card);
   });
-}, { rootMargin: "-20% 0px -70% 0px" });
+  $("previous_intakes").hidden = !history.length;
+}
+
+async function findPatient() {
+  const id = val("lookup_patient_id");
+  const msg = $("lookup_message");
+  msg.hidden = true;
+  if (!id) { msg.textContent = "Enter a Patient ID."; msg.hidden = false; return; }
+  const res = await fetch(`/api/intake/patients/${encodeURIComponent(id.toUpperCase())}`);
+  if (!res.ok) { msg.textContent = res.status === 404 ? "No patient with that ID." : "The record could not be loaded."; msg.hidden = false; return; }
+  const data = await res.json();
+  resetForm();
+  const pt = data.patient;
+  $("patient_id").value = pt.patient_id;
+  $("full_name").value = pt.full_name;
+  $("date_of_birth").value = pt.date_of_birth;
+  $("phone").value = pt.phone || "";
+  $("national_id").value = pt.national_id || "";
+  renderHistory(data.intake_history || []);
+  lookup.close();
+  refresh();
+  $("full_name").focus();
+}
+
+// ---------- Section highlight in the side menu ----------
+const tocLinks = [...document.querySelectorAll(".toc a")];
+const observer = new IntersectionObserver((entries) => entries.forEach((en) => {
+  if (en.isIntersecting) tocLinks.forEach((a) => a.classList.toggle("active", a.getAttribute("href") === `#${en.target.id}`));
+}), { rootMargin: "-20% 0px -70% 0px" });
 document.querySelectorAll(".block").forEach((s) => observer.observe(s));
+
+// ---------- Start ----------
+$("evaluation_date").value = todayIso();
+$("signed_date").value = todayIso();
+refresh();
+if (new URLSearchParams(location.search).get("lookup") === "1") $("open_lookup").click();

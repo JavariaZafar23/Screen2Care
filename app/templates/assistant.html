@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon %}
+{% block title %}Care Assistant{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Care Assistant</h1>
+    <p>Ask about your patients and SLA deadlines. It reads the same data as your dashboard and cannot change anything.</p>
+  </div>
+  <div class="actions-row">
+    {% if ai.online and ai.installed %}<span class="pill pill-ok">Local AI online · {{ ai.model }}</span>
+    {% elif ai.online %}<span class="pill pill-warn">Model {{ ai.model }} not installed</span>
+    {% else %}<span class="pill pill-crit">Local AI offline</span>{% endif %}
+  </div>
+</div>
+
+{% if not ai.online %}
+<div class="notice notice-error" style="margin-bottom:1rem">The local AI (Ollama) is not running. Start it, then reload this page.</div>
+{% elif not ai.installed %}
+<div class="notice notice-error" style="margin-bottom:1rem">Install the model first: <span class="mono">ollama pull {{ ai.model }}</span></div>
+{% endif %}
+
+<section class="card chat" aria-label="Conversation">
+  <div class="chat-log" id="log" aria-live="polite">
+    <div class="msg msg-bot">
+      <div class="bubble">Hi {{ (user.name or '').replace('Dr. ', '').split()[0] if user.name else '' }}. I can look up the patients on your list, their care-loop status and open SLA alerts. Try one of these:</div>
+      <div class="suggestions">
+        <button type="button">Which of my patients are overdue?</button>
+        <button type="button">What alerts do I have?</button>
+        <button type="button">What is the status of BC-HP-001?</button>
+      </div>
+    </div>
+  </div>
+  <form class="chat-form form" id="ask" style="display:flex">
+    <label class="sr-only" for="question">Your question</label>
+    <input id="question" type="text" autocomplete="off" maxlength="1000" placeholder="Ask about your patients…" {% if not (ai.online and ai.installed) %}disabled{% endif %}>
+    <button class="btn" type="submit" id="send" {% if not (ai.online and ai.installed) %}disabled{% endif %}>{{ icon('send') }}<span class="sr-only">Send</span></button>
+  </form>
+</section>
+<p class="muted small" style="margin-top:.75rem">{{ icon('shield') }} Runs on this computer; no patient data leaves the hospital. A small model can still make mistakes, so check the dashboard before you act.</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const log = document.getElementById("log");
+  const input = document.getElementById("question");
+  const send = document.getElementById("send");
+  const history = [];
+
+  function add(role, text, tools) {
+    const wrap = document.createElement("div");
+    wrap.className = `msg msg-${role === "user" ? "user" : "bot"}`;
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.textContent = text;
+    wrap.appendChild(bubble);
+    if (tools && tools.length) {
+      const t = document.createElement("div");
+      t.className = "tools";
+      t.textContent = "Looked up: " + [...new Set(tools.map((x) => x.tool.replaceAll("_", " ")))].join(", ");
+      wrap.appendChild(t);
+    }
+    log.appendChild(wrap);
+    log.scrollTop = log.scrollHeight;
+    return wrap;
+  }
+
+  async function ask(question) {
+    add("user", question);
+    const thinking = add("bot", "Looking that up… (local AI, can take 20–60 s)");
+    thinking.querySelector(".bubble").classList.add("muted");
+    input.value = ""; input.disabled = true; send.disabled = true;
+    const { ok, data } = await postJSON("/api/assistant", { question, history });
+    thinking.remove();
+    input.disabled = false; send.disabled = false; input.focus();
+    if (!ok) { add("bot", errorText(data, "The assistant could not answer.")); return; }
+    add("bot", data.answer, data.tools_used);
+    history.push({ role: "user", content: question }, { role: "assistant", content: data.answer });
+  }
+
+  document.getElementById("ask").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = input.value.trim();
+    if (q.length >= 2) ask(q);
+  });
+  document.querySelectorAll(".suggestions button").forEach((b) =>
+    b.addEventListener("click", () => { if (!input.disabled) ask(b.textContent); }));
+</script>
+{% endblock %}

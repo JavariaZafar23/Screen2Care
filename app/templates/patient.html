@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon %}
+{% block title %}My record{% endblock %}
+{% block content %}
+<div class="portal">
+  <div class="page-head">
+    <div>
+      <h1>Hello, {{ patient.full_name.split()[0] }}</h1>
+      <p>Patient ID <span class="mono">{{ patient.patient_id }}</span> · born {{ patient.date_of_birth.strftime('%d %b %Y') }}</p>
+    </div>
+  </div>
+
+  <div class="stack">
+    {% if ack_needed %}
+    <section class="card card-pad ack-card" aria-labelledby="ack-h">
+      <p class="eyebrow" id="ack-h">Action needed</p>
+      <h2 style="margin:0 0 .35rem;font-size:1.15rem">Please confirm you received our message</h2>
+      <p style="margin:0 0 1rem">We sent you a text message about your recent screening result. Please confirm you have received it so your care team can arrange your next steps.</p>
+      <button class="btn" id="ack" type="button">{{ icon('check') }} I received the message</button>
+    </section>
+    {% endif %}
+
+    <section class="card card-pad status-card tone-{{ status.tone }}" aria-labelledby="status-h">
+      <p class="eyebrow" id="status-h">Your current status</p>
+      <h2>{{ status.title }}</h2>
+      <p style="margin:0">{{ status.detail }}</p>
+    </section>
+
+    {% if steps %}
+    <section class="card card-pad" aria-labelledby="journey-h">
+      <p class="eyebrow" id="journey-h">Your progress</p>
+      <ol class="journey">
+        {% for s in steps %}
+        <li class="{{ 'done' if s.done else ('current' if s.current else 'todo') }}">
+          <span class="dot" aria-hidden="true">{% if s.done %}{{ icon('check') }}{% endif %}</span>
+          <span class="label">{{ s.label }}
+            <span class="sr-only">{{ '(done)' if s.done else ('(in progress)' if s.current else '(not yet)') }}</span>
+          </span>
+          <span class="when muted small">{% if s.done and s.when %}{{ s.when.strftime('%d %b %Y') }}{% elif s.current %}In progress{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ol>
+    </section>
+    {% endif %}
+
+    <div class="grid-2">
+      <section class="card" aria-labelledby="appt-h">
+        <div class="card-head"><h2 id="appt-h">{{ icon('calendar') }} Appointments</h2></div>
+        <div class="card-pad">
+          <p class="eyebrow">Coming up</p>
+          {% if upcoming %}
+          <ul class="timeline">
+            {% for a in upcoming %}
+            <li>
+              <span class="when">{% if a.exact %}{{ a.when.strftime('%a %d %b, %H:%M') }}{% else %}Around {{ a.when.strftime('%B %Y') }}{% endif %}</span>
+              <span>{{ a.what }}{% if not a.exact %}<br><span class="muted small">We will contact you with a date.</span>{% endif %}</span>
+            </li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted" style="margin:0 0 1rem">No appointments booked. Your care team will contact you if you need one.</p>
+          {% endif %}
+
+          <p class="eyebrow" style="margin-top:1rem">Past visits</p>
+          {% if visits %}
+          <ul class="timeline">
+            {% for v in visits %}
+            <li><span class="when">{{ v.when.strftime('%d %b %Y') }}</span><span>{{ v.what }}</span></li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="muted" style="margin:0">No visits recorded yet.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="notes-h">
+        <div class="card-head"><h2 id="notes-h">{{ icon('file') }} Notes from your care team</h2></div>
+        <div class="card-pad">
+          {% if notes %}
+            {% for n in notes %}
+            <article class="note-card">
+              <p class="muted small" style="margin:0">Visit {{ n.encounter_date.strftime('%d %b %Y') }} · shared {{ n.released_at.strftime('%d %b %Y') }}</p>
+              <p>{{ n.note_text }}</p>
+            </article>
+            {% endfor %}
+          {% else %}
+          <p class="muted" style="margin:0">No notes have been shared with you yet.</p>
+          {% endif %}
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  document.getElementById("ack")?.addEventListener("click", async (e) => {
+    busy(e.currentTarget, true, "Confirming…");
+    const { ok } = await postJSON("/api/me/acknowledge");
+    if (ok) location.reload(); else busy(e.currentTarget, false);
+  });
+</script>
+{% endblock %}

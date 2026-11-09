@@ -1,0 +1,13 @@
+{% from "_ui.html" import icon %}
+<section class="auth-brand">
+  <a class="brand" href="/login"><span class="brand-mark">{{ icon('loop') }}</span><span>Care Loop<small>Screening to treatment</small></span></a>
+  <div>
+    <h1>No patient drops out of the care loop.</h1>
+    <p>From an abnormal mammogram to the first day of treatment, every step has a deadline, an owner and an alert.</p>
+  </div>
+  <ul class="auth-points">
+    <li>{{ icon('clock') }}<span><b>Five SLA clocks</b><br>Notification, biopsy, pathology, referral and treatment, tracked automatically.</span></li>
+    <li>{{ icon('alert') }}<span><b>Escalations that reach the right person</b><br>Missed deadlines go straight to the navigator, scheduler, lab, tumor board or CMO.</span></li>
+    <li>{{ icon('sparkles') }}<span><b>Private, on-site AI</b><br>A local model drafts patient letters and answers worklist questions. Data stays in the hospital.</span></li>
+  </ul>
+</section>

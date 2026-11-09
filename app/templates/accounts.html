@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon %}
+{% block title %}Account requests{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Account requests</h1>
+    <p>Staff who signed up and are waiting for access. Approving creates their staff record and login.</p>
+  </div>
+</div>
+
+<section class="card">
+  <div class="card-head">
+    <h2>{{ icon('users') }} Waiting for approval <span class="count {{ 'zero' if not requests else '' }}">{{ requests | length }}</span></h2>
+  </div>
+  <div id="err" class="notice notice-error" role="alert" hidden style="margin:1rem 1.4rem 0"></div>
+  {% if requests %}
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Requested</th><th><span class="sr-only">Decision</span></th></tr></thead>
+      <tbody>
+        {% for r in requests %}
+        <tr>
+          <td class="name">{{ r.full_name }}</td>
+          <td class="mono">{{ r.username }}</td>
+          <td><span class="pill pill-info pill-plain">{{ labels.get(r.role, r.role) }}</span></td>
+          <td class="small">{{ r.requested_at.strftime('%d %b %Y %H:%M') }}</td>
+          <td style="text-align:right;white-space:nowrap">
+            <button class="btn btn-ok btn-sm decide" data-id="{{ r.request_id }}" data-decision="approve" type="button">{{ icon('check') }} Approve</button>
+            <button class="btn btn-danger btn-sm decide" data-id="{{ r.request_id }}" data-decision="reject" type="button">Reject</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">{{ icon('check') }}<br>No requests waiting.</div>
+  {% endif %}
+</section>
+
+<p class="muted small" style="margin-top:1rem">New clinicians start with an empty patient list. Assign patients to them in <span class="mono">care_team_assignment</span>.</p>
+{% endblock %}
+{% block scripts %}
+<script>
+  document.querySelectorAll("button.decide").forEach((b) => b.addEventListener("click", async () => {
+    const approve = b.dataset.decision === "approve";
+    if (!approve && !confirm("Reject this request?")) return;
+    busy(b, true, "");
+    const { ok, data } = await postJSON(`/api/admin/signup-requests/${b.dataset.id}/${b.dataset.decision}`);
+    if (ok) { location.reload(); return; }
+    busy(b, false);
+    const err = document.getElementById("err"); err.textContent = errorText(data); err.hidden = false;
+  }));
+</script>
+{% endblock %}

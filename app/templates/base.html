@@ -1,0 +1,70 @@
+{% from "_ui.html" import icon %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Dashboard{% endblock %} · Care Loop</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+{% if user %}
+  {% set parts = (user.name or role_label or 'User').replace('Dr. ', '').split() %}
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="/">
+        <span class="brand-mark">{{ icon('loop') }}</span>
+        <span>Care Loop<small>Screening to treatment</small></span>
+      </a>
+      <nav class="nav" aria-label="Main">
+        {% for label, href, ic in nav %}
+        <a href="{{ href }}" {% if path == href or (href != '/' and path.startswith(href)) %}aria-current="page"{% endif %} title="{{ label }}">{{ icon(ic) }}<span>{{ label }}</span></a>
+        {% endfor %}
+      </nav>
+      <div class="side-foot">
+        <div class="user-chip">
+          <span class="avatar" aria-hidden="true">{{ (parts[0][0] ~ (parts[-1][0] if parts | length > 1 else '')) | upper }}</span>
+          <div><b>{{ user.name or 'Signed in' }}</b><span>{{ role_label }}</span></div>
+        </div>
+        <button class="logout" id="logout" type="button" title="Log out">{{ icon('logout') }}<span>Log out</span></button>
+      </div>
+    </aside>
+    <main class="content" id="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script>
+    document.getElementById("logout").addEventListener("click", async () => {
+      await fetch("/api/logout", { method: "POST" });
+      window.location.href = "/login";
+    });
+  </script>
+{% else %}
+  {% block public %}{% endblock %}
+{% endif %}
+<script>
+    // Small helper used by pages: POST JSON, return {ok, data}
+  async function postJSON(url, body) {
+    const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+                                   body: body === undefined ? undefined : JSON.stringify(body) });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+  }
+  function errorText(data, fallback) {
+    if (typeof data?.detail === "string") return data.detail;
+    if (Array.isArray(data?.detail)) return data.detail.map((d) => (d.msg || "").replace(/^Value error, /, "")).join(" ");
+    return fallback || "Something went wrong. Try again.";
+  }
+  function busy(btn, on, label) {
+    if (on) { btn.dataset.label = btn.innerHTML; btn.disabled = true;
+              btn.innerHTML = `<span class="spinner" aria-hidden="true"></span> ${label || "Working…"}`; }
+    else { btn.disabled = false; btn.innerHTML = btn.dataset.label; }
+  }
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

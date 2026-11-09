@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, dur %}
+{% block title %}Care loop · {{ patient.full_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="crumb" href="/">{{ icon('back') }} Dashboard</a>
+    <h1>{{ patient.full_name }}</h1>
+    <p><span class="mono">{{ patient.patient_id }}</span>
+      {% if episode %} · care loop opened {{ episode.opened_at.strftime('%d %b %Y') }} from BI-RADS {{ episode.birads_category }} ({{ episode.modality }}){% endif %}</p>
+  </div>
+  <div class="actions-row">
+    {% if episode %}<span class="pill {{ 'pill-info' if episode.status in ('Open','Paused') else 'pill-ok' }}">{{ episode.status }}</span>{% endif %}
+    {% if user.role == 'Clinician' %}<a class="btn btn-secondary" href="/plan/{{ patient.patient_id }}">{{ icon('file') }} Clinical plan</a>{% endif %}
+  </div>
+</div>
+
+{% if not episode %}
+<section class="card">
+  <div class="empty-state">{{ icon('loop') }}<br>No care loop for this patient. A loop opens automatically when the rules engine sees a BI-RADS 4 or 5 result.</div>
+</section>
+{% else %}
+{% set s1_open = sections and sections[0].task and not sections[0].task.completed_at %}
+<div class="grid-2" style="align-items:start">
+  <section class="card" aria-labelledby="sla-h">
+    <div class="card-head"><h2 id="sla-h">{{ icon('clock') }} SLA timeline</h2></div>
+    <div class="card-pad" style="padding-top:.4rem;padding-bottom:.4rem">
+      <ol class="sla-track">
+        {% for s in sections %}
+        {% set st = s.status %}
+        <li class="sla-step st-{{ st | lower | replace(' ', '-') }}">
+          <span class="sla-dot">{% if st in ('Met', 'Met late') %}{{ icon('check') }}{% else %}{{ s.def.section }}{% endif %}</span>
+          <div>
+            <h3>{{ s.def.name }}</h3>
+            <p>Target {% if s.def.target_hours >= 48 %}{{ s.def.target_hours // 24 }} days{% else %}{{ s.def.target_hours }} hours{% endif %} · escalates to {{ role_labels.get(s.def.escalation1_role, s.def.escalation1_role) }}</p>
+            {% if s.task %}
+            <p>Due {{ s.task.due_at.strftime('%d %b %H:%M') }}{% if s.task.completed_at %} · done {{ s.task.completed_at.strftime('%d %b %H:%M') }}{% endif %}</p>
+            {% endif %}
+          </div>
+          <div>
+            {% if st == 'Breached' %}<span class="pill pill-crit">{{ dur(s.hours_left) }} overdue</span>
+            {% elif st == 'Running' %}<span class="pill pill-info">{{ dur(s.hours_left) }} left</span>
+            {% elif st == 'Met' %}<span class="pill pill-ok">Met</span>
+            {% elif st == 'Met late' %}<span class="pill pill-warn">Met late</span>
+            {% else %}<span class="pill">{{ st }}</span>{% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ol>
+    </div>
+  </section>
+
+  <div class="stack">
+    {% if episode.status in ('Open', 'Paused') %}
+    <section class="card" aria-labelledby="next-h">
+      <div class="card-head"><h2 id="next-h">{{ icon('activity') }} Next steps</h2></div>
+      <div class="card-pad">
+        <div id="form_error" class="notice notice-error" role="alert" hidden style="margin-bottom:1rem"></div>
+        {% set shown = namespace(any=false) %}
+
+        {% if s1_open and can.contact %}{% set shown.any = true %}
+        <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/contact">
+          <h3>S1 · Log a contact with the patient</h3>
+          <div class="row">
+            <label class="f-label">Channel
+              <select name="channel"><option>Phone</option><option>SMS</option><option value="InPerson">In person</option><option>Email</option></select>
+            </label>
+            <label class="f-label">Outcome
+              <select name="outcome"><option>Reached</option><option value="NoAnswer">No answer</option><option value="WrongNumber">Wrong number</option><option>Declined</option></select>
+            </label>
+          </div>
+          <p class="muted small" style="margin:0">"Reached" counts as the patient acknowledging the result and starts the 7-day biopsy clock.</p>
+          <div class="actions-row">
+            <button class="btn" type="submit">Save contact</button>
+            <button class="btn btn-ai" type="button" id="script_btn">{{ icon('sparkles') }} Draft call script</button>
+          </div>
+          <div id="script_box" class="notice notice-ai" hidden>
+            <p class="eyebrow" style="color:var(--ai)">{{ icon('sparkles') }} AI draft · check before using</p>
+            <div id="script_text" class="ai-output"></div>
+          </div>
+        </form>
+        {% endif %}
+
+        {% if (not biopsy or biopsy.status in ('Cancelled', 'NoShow')) and can.book_biopsy %}{% set shown.any = true %}
+        <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/biopsy">
+          <h3>S2 · Book the biopsy</h3>
+          <div class="row">
+            <label class="f-label">Type
+              <select name="biopsy_type"><option value="US-Core">Ultrasound-guided core</option><option>Stereotactic</option><option value="MRI-Guided">MRI-guided</option><option>Surgical</option></select>
+            </label>
+            <label class="f-label">Side
+              <select name="laterality"><option value="">Not set</option><option value="L">Left</option><option value="R">Right</option></select>
+            </label>
+          </div>
+          <label class="f-label">Appointment
+            <input type="datetime-local" name="scheduled_for" required>
+          </label>
+          <div><button class="btn" type="submit">Book biopsy</button></div>
+        </form>
+        {% endif %}
+
+        {% if biopsy and biopsy.status == 'Booked' and can.biopsy_performed %}{% set shown.any = true %}
+        <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/biopsy/performed">
+          <h3>S3 · Biopsy done</h3>
+          <p class="muted small" style="margin:0">{{ biopsy.biopsy_type }} booked for {{ biopsy.scheduled_for.strftime('%d %b %Y %H:%M') }}. Marking it done starts the 5-day pathology clock.</p>
+          <div><button class="btn" type="submit">Mark biopsy performed</button></div>
+        </form>
+        {% endif %}
+
+        {% if biopsy and biopsy.status == 'Performed' and not pathology and can.pathology %}{% set shown.any = true %}
+        <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/pathology">
+          <h3>S3 · Pathology report</h3>
+          <div class="row">
+            <label class="f-label">Diagnosis
+              <select name="diagnosis"><option>Benign</option><option value="HighRiskLesion">High-risk lesion</option><option>Malignant</option><option value="NonDiagnostic">Non-diagnostic</option></select>
+            </label>
+            <label class="f-label">Histology <small>optional</small>
+              <input type="text" name="histology" maxlength="100">
+            </label>
+          </div>
+          <p class="muted small" style="margin:0">A malignant result creates an oncology referral and starts the referral and treatment clocks.</p>
+          <div><button class="btn" type="submit">Save report</button></div>
+        </form>
+        {% endif %}
+
+        {% if pathology and not pathology.disclosed_at and (can.book_results or can.disclose_result) %}{% set shown.any = true %}
+        <div class="step-form results-step">
+          <h3>Results for the patient</h3>
+          <p class="muted small" style="margin:0">The patient's page says their report is ready, but shows the result only after a doctor has gone through it with them.
+            {% if results_appt and results_appt.status == 'Booked' %}<br><strong>Appointment booked:</strong> {{ results_appt.doctor }}, {{ results_appt.scheduled_for.strftime('%a %d %b %Y %H:%M') }}{% endif %}</p>
+
+          {% if can.book_results %}
+          <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/results-appointment">
+            <div class="row">
+              <label class="f-label">Doctor
+                <select name="clinician_staff_id" data-int>
+                  {% for c in clinicians %}<option value="{{ c.staff_id }}">{{ c.full_name }}{% if c.on_team %} (care team){% endif %}</option>{% endfor %}
+                </select>
+              </label>
+              <label class="f-label">Appointment
+                <input type="datetime-local" name="scheduled_for" required>
+              </label>
+            </div>
+            <div><button class="btn {{ 'btn-secondary' if results_appt and results_appt.status == 'Booked' else '' }}" type="submit">
+              {{ 'Move appointment' if results_appt and results_appt.status == 'Booked' else 'Book results appointment' }}</button></div>
+          </form>
+          {% endif %}
+
+          {% if can.disclose_result %}
+          <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/result-disclosed">
+            <label class="f-label">How did you tell the patient?
+              <select name="channel"><option value="InPerson">In person</option><option value="Phone">Phone</option></select>
+            </label>
+            <p class="muted small" style="margin:0">Result: <strong>{{ pathology.diagnosis }}</strong>{% if pathology.histology %} · {{ pathology.histology }}{% endif %}. Pressing this shows it on the patient's page.</p>
+            <div><button class="btn" type="submit">{{ icon('check') }} I have discussed the result with the patient</button></div>
+          </form>
+          {% endif %}
+        </div>
+        {% endif %}
+
+        {% if referral and referral.status == 'Pending' and can.assign_referral %}{% set shown.any = true %}
+        <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/referral/assign">
+          <h3>S4 · Assign the oncology referral</h3>
+          <label class="f-label">Assign to
+            <select name="assignee_staff_id" data-int>
+              {% for a in assignees %}<option value="{{ a.staff_id }}">{{ a.full_name }} ({{ a.role }})</option>{% endfor %}
+            </select>
+          </label>
+          <div><button class="btn" type="submit">Assign referral</button></div>
+        </form>
+        {% endif %}
+
+        {% if pathology and pathology.diagnosis == 'Malignant' and not treatment and can.treatment and pathology.disclosed_at %}{% set shown.any = true %}
+        <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/treatment">
+          <h3>S5 · Treatment started</h3>
+          <label class="f-label">First treatment
+            <select name="treatment_type"><option>Surgery</option><option value="NeoadjuvantChemo">Neoadjuvant chemotherapy</option><option>Chemotherapy</option><option>Radiation</option><option>Endocrine</option><option>Other</option></select>
+          </label>
+          <p class="muted small" style="margin:0">This closes the care loop.</p>
+          <div><button class="btn btn-ok" type="submit">Record treatment start</button></div>
+        </form>
+        {% endif %}
+
+        {% if not shown.any %}
+        <p class="muted" style="margin:0">Nothing for your role to do at this step.</p>
+        {% endif %}
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="card" aria-labelledby="rec-h">
+      <div class="card-head"><h2 id="rec-h">{{ icon('file') }} Record</h2></div>
+      <div class="card-pad">
+        <ul class="record">
+          {% for c in contacts %}
+          <li>{{ icon('phone') }} {{ c.attempted_at.strftime('%d %b %H:%M') }} · {{ c.channel }} · {{ c.outcome or ('acknowledged' if c.acknowledged_at else 'waiting for reply') }} · <span class="muted">{{ c.by_name or 'system' }}</span></li>
+          {% endfor %}
+          {% if biopsy %}<li>Biopsy: {{ biopsy.biopsy_type }} · {{ biopsy.status }}{% if biopsy.scheduled_for %} · {{ biopsy.scheduled_for.strftime('%d %b %Y %H:%M') }}{% endif %}</li>{% endif %}
+          {% if pathology %}<li>Pathology: <strong>{{ pathology.diagnosis }}</strong>{% if pathology.histology %} · {{ pathology.histology }}{% endif %} · {{ pathology.reported_at.strftime('%d %b %Y') }}</li>{% endif %}
+          {% if results_appt %}<li>{{ icon('calendar') }} Results appointment: {{ results_appt.doctor }} · {{ results_appt.scheduled_for.strftime('%d %b %Y %H:%M') }} · {{ results_appt.status }}</li>{% endif %}
+          {% if pathology and pathology.disclosed_at %}<li>{{ icon('check') }} Result told to patient {{ pathology.disclosed_at.strftime('%d %b %Y %H:%M') }} · {{ 'in person' if pathology.disclosure_channel == 'InPerson' else 'by phone' }} · {{ pathology.disclosed_by_name }}</li>
+          {% elif pathology %}<li class="muted">Result not yet told to the patient</li>{% endif %}
+          {% if referral %}<li>Referral: {{ referral.specialty }} · {{ referral.status }}{% if referral.assignee %} · {{ referral.assignee }}{% endif %}</li>{% endif %}
+          {% if treatment %}<li>Treatment: {{ treatment.treatment_type }} started {{ treatment.started_at.strftime('%d %b %Y') }}</li>{% endif %}
+          {% if not (contacts or biopsy or pathology or referral or treatment) %}<li class="muted">Nothing recorded yet.</li>{% endif %}
+        </ul>
+      </div>
+    </section>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const errBox = document.getElementById("form_error");
+  document.querySelectorAll("form.step-form").forEach((form) => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const body = {};
+      new FormData(form).forEach((v, k) => {
+        if (v === "") return;
+        body[k] = form.querySelector(`[name="${k}"]`).hasAttribute("data-int") ? Number(v) : v;
+      });
+      const btn = form.querySelector("button[type=submit]");
+      busy(btn, true, "Saving…");
+      const { ok, data } = await postJSON(form.dataset.endpoint, body);
+      if (ok) { location.reload(); return; }
+      busy(btn, false);
+      errBox.textContent = errorText(data, "Could not save. Check the fields and try again.");
+      errBox.hidden = false;
+    });
+  });
+
+  document.getElementById("script_btn")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    busy(btn, true, "Drafting… (local AI, ~20 s)");
+    const { ok, data } = await postJSON("/api/patients/{{ patient.patient_id }}/call-script");
+    busy(btn, false);
+    if (!ok) { errBox.textContent = errorText(data); errBox.hidden = false; return; }
+    document.getElementById("script_text").textContent = data.script;
+    document.getElementById("script_box").hidden = false;
+  });
+</script>
+{% endblock %}

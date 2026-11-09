@@ -1,45 +1,221 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Screening-to-Care Loop</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
-</head>
-<body>
-  <header>
-    <div class="header-row">
+{% extends "base.html" %}
+{% from "_ui.html" import icon, dur %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+{% set clinical = user.role != 'Admin' %}
+{% set ns = namespace(overdue=0, loops=0, flags=0) %}
+{% for p in patients %}
+  {% if p.sla_section and p.sla_hours_left < 0 %}{% set ns.overdue = ns.overdue + 1 %}{% endif %}
+  {% if p.episode_status %}{% set ns.loops = ns.loops + 1 %}{% endif %}
+  {% set ns.flags = ns.flags + (p.flag_count or 0) %}
+{% endfor %}
+
+<div class="page-head">
+  <div>
+    <h1>Dashboard</h1>
+    <p>{{ list_title }}</p>
+  </div>
+  <div class="actions-row">
+    {% if user.role == 'Admin' %}<a class="btn" href="/intake">{{ icon('plus') }} New patient intake</a>{% endif %}
+    {% if nav | selectattr(1, 'equalto', '/assistant') | list %}<a class="btn btn-secondary" href="/assistant">{{ icon('sparkles') }} Ask the Care Assistant</a>{% endif %}
+  </div>
+</div>
+
+<section class="stats" aria-label="Summary">
+  <div class="card stat">
+    <div class="label">{{ 'Registered patients' if user.role == 'Admin' else 'On your list' }}</div>
+    <div class="value">{{ patients | length }}</div>
+    <div class="sub">{{ list_title }}</div>
+  </div>
+  {% if user.role == 'Admin' %}
+  <a class="card stat {{ 'is-warn' if pending_accounts else '' }}" href="/admin/accounts" style="color:inherit;text-decoration:none">
+    <div class="label">Account requests</div>
+    <div class="value">{{ pending_accounts }}</div>
+    <div class="sub">Staff waiting for approval</div>
+  </a>
+  <div class="card stat {{ 'is-warn' if ns.flags else 'is-ok' }}">
+    <div class="label">Data-quality flags</div>
+    <div class="value">{{ ns.flags }}</div>
+    <div class="sub">Records to check at the desk</div>
+  </div>
+  {% else %}
+  <div class="card stat {{ 'is-crit' if alerts else 'is-ok' }}">
+    <div class="label">{{ 'Open breaches' if user.role == 'CMO' else 'Alerts for you' }}</div>
+    <div class="value">{{ alerts | length }}</div>
+    <div class="sub">{{ 'Across all SLA sections' if user.role == 'CMO' else 'SLA deadlines missed' }}</div>
+  </div>
+  <div class="card stat {{ 'is-crit' if ns.overdue else '' }}">
+    <div class="label">Overdue clocks</div>
+    <div class="value">{{ ns.overdue }}</div>
+    <div class="sub">Patients past their next deadline</div>
+  </div>
+  <div class="card stat">
+    <div class="label">Open care loops</div>
+    <div class="value">{{ ns.loops }}</div>
+    <div class="sub">BI-RADS 4/5 still in progress</div>
+  </div>
+  {% endif %}
+</section>
+
+{% if user.role != 'Admin' %}
+<section class="card" aria-labelledby="alerts-h" style="margin-bottom:1.5rem">
+  <div class="card-head">
+    <h2 id="alerts-h">{{ icon('alert') }} {{ 'SLA breaches across the hospital' if user.role == 'CMO' else 'SLA alerts for you' }}
+      <span class="count {{ 'zero' if not alerts else '' }}">{{ alerts | length }}</span></h2>
+  </div>
+  {% if alerts %}
+  <ul class="alert-list">
+    {% for a in alerts %}
+    <li class="alert-item s{{ a.section }}">
+      <span class="sec">S{{ a.section }}</span>
       <div>
-        <h1>Screening-to-Care Loop</h1>
-        <p>Patient overview: latest imaging result per patient</p>
+        <h3><a href="/loop/{{ a.patient_id }}">{{ a.full_name }}</a> <span class="id mono muted">{{ a.patient_id }}</span></h3>
+        <p>{{ a.action_text }}</p>
+        <div class="meta">{{ a.section_name }} · <strong style="color:var(--crit)">{{ dur(a.hours_overdue) }} overdue</strong>{% if user.role == 'CMO' %} · routed to {{ role_labels.get(a.routed_to_role, a.routed_to_role) }}{% endif %}</div>
       </div>
-      <a class="button" href="/intake">New patient intake</a>
+      <div>
+        {% if a.seen_at %}<span class="pill pill-plain">{{ icon('check') }} Seen {{ a.seen_at.strftime('%d %b %H:%M') }}</span>
+        {% else %}<button class="btn btn-secondary btn-sm seen" data-id="{{ a.alert_id }}" type="button">Mark seen</button>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">{{ icon('check') }}<br>No open alerts. Every clock you own is on time.</div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if results_due %}
+<section class="card" aria-labelledby="results-h" style="margin-bottom:1.5rem">
+  <div class="card-head">
+    <h2 id="results-h">{{ icon('calendar') }} Biopsy results to go through with the patient
+      <span class="count">{{ results_due | length }}</span></h2>
+  </div>
+  <ul class="alert-list">
+    {% for r in results_due %}
+    <li class="alert-item notify {{ 'unseen' if not r.scheduled_for else '' }}">
+      <span class="sec" aria-hidden="true">{{ icon('file') }}</span>
+      <div>
+        <h3><a href="/loop/{{ r.patient_id }}">{{ r.full_name }}</a> <span class="id mono muted">{{ r.patient_id }}</span></h3>
+        <p>Report filed {{ r.reported_at.strftime('%d %b %Y') }}. The patient can see it is ready, but not the result.</p>
+        <div class="meta">{% if r.scheduled_for %}Appointment with {{ r.doctor }} · {{ r.scheduled_for.strftime('%a %d %b %H:%M') }}{% else %}<strong>No appointment booked yet</strong>{% endif %}</div>
+      </div>
+      <div><a class="btn btn-secondary btn-sm" href="/loop/{{ r.patient_id }}">{{ 'Open' if r.scheduled_for else 'Book' }}</a></div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if user.role == 'TumorBoard' %}
+{% set unseen = notifications | selectattr('seen_at', 'none') | list %}
+<section class="card" aria-labelledby="notify-h" style="margin-bottom:1.5rem">
+  <div class="card-head">
+    <h2 id="notify-h">{{ icon('activity') }} New urgent workups (BI-RADS 4/5)
+      <span class="count {{ 'zero' if not unseen else '' }}">{{ unseen | length }}</span></h2>
+  </div>
+  {% if notifications %}
+  <ul class="alert-list">
+    {% for n in notifications %}
+    <li class="alert-item notify {{ 'unseen' if not n.seen_at else '' }}">
+      <span class="sec" aria-hidden="true">{{ icon('activity') }}</span>
+      <div>
+        <h3><a href="/loop/{{ n.patient_id }}">{{ n.full_name }}</a> <span class="id mono muted">{{ n.patient_id }}</span></h3>
+        <p>{{ n.message }}</p>
+        <div class="meta">Care loop opened {{ n.created_at.strftime('%d %b %Y %H:%M') }}</div>
+      </div>
+      <div>
+        {% if n.seen_at %}<span class="pill pill-plain">{{ icon('check') }} Seen {{ n.seen_at.strftime('%d %b %H:%M') }}</span>
+        {% else %}<button class="btn btn-secondary btn-sm seen-n" data-id="{{ n.notification_id }}" type="button">Mark seen</button>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">{{ icon('check') }}<br>No suspicious results waiting for the oncology team.</div>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card" aria-labelledby="patients-h">
+  <div class="card-head">
+    <h2 id="patients-h">{{ icon('users') }} Patients</h2>
+    <div class="table-tools">
+      <label class="search"><span class="sr-only">Search patients</span>{{ icon('search') }}
+        <input id="q" type="search" placeholder="Search name or ID">
+      </label>
     </div>
-  </header>
-  <main>
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Patient ID</th><th>Name</th><th>Age</th><th>BI-RADS</th>
-            <th>Density</th><th>Result date</th><th>Data flags</th>
-          </tr>
-        </thead>
-        <tbody>
-        {% for p in patients %}
-          <tr>
-            <td><a href="/api/patients/{{ p.patient_id }}">{{ p.patient_id }}</a></td>
-            <td>{{ p.full_name }}</td>
-            <td>{{ p.age }}</td>
-            <td><span class="badge birads-{{ p.birads_category }}">{{ p.birads_category if p.birads_category is not none else '—' }}</span></td>
-            <td>{{ p.density or '—' }}</td>
-            <td>{{ p.result_released_at.strftime('%d %b %Y') if p.result_released_at else '—' }}</td>
-            <td>{% if p.flag_count %}<span class="flag">{{ p.flag_count }}</span>{% else %}—{% endif %}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </main>
-</body>
-</html>
+  </div>
+  {% if patients %}
+  <div class="table-wrap">
+    <table class="data" id="patients">
+      <thead>
+        <tr>
+          <th>Patient</th><th>Age</th>
+          {% if clinical %}<th>BI-RADS</th><th>Density</th><th>Result</th><th>Lane</th><th>Next deadline</th>{% endif %}
+          <th>Flags</th>
+          {% if clinical %}<th><span class="sr-only">Actions</span></th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+      {% for p in patients %}
+        <tr>
+          <td><div class="name">{{ p.full_name }}</div><div class="id muted">{{ p.patient_id }}</div></td>
+          <td>{{ p.age }}</td>
+          {% if clinical %}
+          <td><span class="badge birads-{{ p.birads_category }}">{{ p.birads_category if p.birads_category is not none else '—' }}</span></td>
+          <td>{{ p.density or '—' }}</td>
+          <td class="small">{{ p.result_released_at.strftime('%d %b %Y') if p.result_released_at else '—' }}</td>
+          <td>{% if p.current_lane %}<span class="pill pill-plain">{{ p.current_lane }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          <td>
+            {% if p.sla_section %}
+              {% if p.sla_hours_left < 0 %}<span class="pill pill-crit">S{{ p.sla_section }} · {{ dur(p.sla_hours_left) }} overdue</span>
+              {% else %}<span class="pill pill-info">S{{ p.sla_section }} · {{ dur(p.sla_hours_left) }} left</span>{% endif %}
+            {% elif p.episode_status %}<span class="pill">{{ p.episode_status }}</span>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+          {% endif %}
+          <td>{% if p.flag_count %}<span class="pill pill-warn">{{ p.flag_count }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+          {% if clinical %}
+          <td style="text-align:right;white-space:nowrap">
+            {% if user.role == 'Clinician' %}<a class="btn btn-secondary btn-sm" href="/plan/{{ p.patient_id }}">Plan</a>{% endif %}
+            <a class="btn btn-ghost btn-sm" href="/loop/{{ p.patient_id }}">Care loop</a>
+          </td>
+          {% endif %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="empty-state" id="no-match" hidden>No patient matches that search.</div>
+  </div>
+  {% else %}
+  <div class="empty-state">{{ icon('users') }}<br>No patients on your list right now.</div>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.querySelectorAll("button.seen").forEach((b) => b.addEventListener("click", async () => {
+    busy(b, true, "");
+    const { ok } = await postJSON(`/api/alerts/${b.dataset.id}/seen`);
+    if (ok) location.reload(); else busy(b, false);
+  }));
+  document.querySelectorAll("button.seen-n").forEach((b) => b.addEventListener("click", async () => {
+    busy(b, true, "");
+    const { ok } = await postJSON(`/api/notifications/${b.dataset.id}/seen`);
+    if (ok) location.reload(); else busy(b, false);
+  }));
+  const q = document.getElementById("q");
+  q?.addEventListener("input", () => {
+    const term = q.value.trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll("#patients tbody tr").forEach((tr) => {
+      const hit = tr.cells[0].textContent.toLowerCase().includes(term);
+      tr.hidden = !hit; if (hit) shown++;
+    });
+    const none = document.getElementById("no-match"); if (none) none.hidden = shown > 0;
+  });
+</script>
+{% endblock %}

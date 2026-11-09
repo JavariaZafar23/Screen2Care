@@ -1,41 +1,66 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>New patient intake – Breast screening</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', path='intake.css') }}">
-</head>
-<body>
-<header class="topbar">
-  <a href="/" class="back">Patient overview</a>
-  <h1>Breast screening clinical proforma</h1>
-</header>
+{% extends "base.html" %}
+{% from "_ui.html" import icon %}
+{% block title %}New patient intake{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', path='intake.css') }}?v=2">{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="crumb" href="/">{{ icon('back') }} Dashboard</a>
+    <h1>Breast screening clinical proforma</h1>
+    <p>New patient intake. Complete the sections in order. A BI-RADS 4 or 5 result starts the care loop as soon as you save.</p>
+  </div>
+  <div class="actions-row">
+    <button class="btn btn-secondary" type="button" id="open_lookup">{{ icon('search') }} Find existing patient</button>
+  </div>
+</div>
+
+<dialog id="patient_lookup" aria-labelledby="lookup-h">
+  <h2 id="lookup-h">Find patient record</h2>
+  <p class="hint">Enter an existing Patient ID to load their details. Earlier intake forms are shown read-only; this form becomes a new visit.</p>
+  <label class="field">Patient ID
+    <input id="lookup_patient_id" type="text" placeholder="BC-HP-001" autocomplete="off">
+  </label>
+  <div id="lookup_message" class="form-error" role="alert" hidden></div>
+  <div class="dialog-actions">
+    <button type="button" class="secondary" id="cancel_lookup">Cancel</button>
+    <button type="button" class="primary-btn" id="find_patient">Find patient</button>
+  </div>
+</dialog>
 
 <div class="layout">
-<form id="intake" novalidate>
+<form id="intake" novalidate autocomplete="off">
+  <div class="form-intro"><strong>Before you begin.</strong> Fields marked <span class="req">required</span> must be filled in.
+    In the breast examination, use “Not answered” when an item was not assessed; it is never treated as normal.</div>
+
+  <section id="previous_intakes" class="block history-block" hidden aria-labelledby="prev-h">
+    <h2 id="prev-h">Previous intake forms <span class="readonly-badge">Read-only</span></h2>
+    <p class="hint">Earlier visits are kept as they were saved and cannot be edited.</p>
+    <div id="previous_intake_cards"></div>
+  </section>
 
   <!-- 1 -->
   <section id="s1" class="block">
-    <h2><span class="num">1</span>Patient demographics</h2>
+    <h2><span class="num">1</span>Patient demographics &amp; baseline data</h2>
     <div class="grid">
       <label class="field span-2">Full name <span class="req">required</span>
-        <input id="full_name" type="text" autocomplete="off" required>
+        <input id="full_name" type="text" required maxlength="150">
       </label>
       <label class="field">Date of birth <span class="req">required</span>
         <input id="date_of_birth" type="date" required>
       </label>
-      <div class="field">Age
-        <output id="age_out" class="derived">—</output>
-      </div>
-      <label class="field">Medical record / National ID
-        <input id="national_id" type="text" autocomplete="off">
-        <small>Existing ID adds this visit to the patient’s record</small>
+      <div class="field">Calculated age <output id="age_out" class="derived">—</output></div>
+      <label class="field">Patient ID
+        <input id="patient_id" type="text" pattern="BC-([A-Z]{2}-[0-9]{3}|[0-9]{5})" placeholder="BC-HP-001">
+        <small>Leave empty for a new patient; an ID is created on save</small>
       </label>
-      <label class="field">Date of evaluation <span class="req">required</span>
+      <label class="field">Phone number <span class="req">required</span>
+        <input id="phone" type="tel" required minlength="7" maxlength="30">
+      </label>
+      <label class="field">National ID (CNIC)
+        <input id="national_id" type="text" maxlength="30">
+        <small>Lets the patient create their own login later</small>
+      </label>
+      <label class="field">Evaluation date <span class="req">required</span>
         <input id="evaluation_date" type="date" required>
       </label>
     </div>
@@ -43,230 +68,169 @@
 
   <!-- 2 -->
   <section id="s2" class="block">
-    <h2><span class="num">2</span>Chief complaint and presenting symptoms</h2>
-    <div class="choice-row big">
-      <label><input type="radio" name="presentation" value="asymptomatic" checked> Asymptomatic (routine screening)</label>
-      <label><input type="radio" name="presentation" value="symptomatic"> Symptomatic</label>
-    </div>
-
-    <div id="symptoms" class="sub" hidden>
-      <div class="sym-row">
-        <span class="sym-name">Lump / mass</span>
-        <div class="choice-row">
-          <label><input type="radio" name="lump_side" value="" checked> None</label>
-          <label><input type="radio" name="lump_side" value="Right"> Right</label>
-          <label><input type="radio" name="lump_side" value="Left"> Left</label>
-          <label><input type="radio" name="lump_side" value="Both"> Both</label>
-        </div>
-        <label class="inline">Duration <input id="lump_duration" type="text" placeholder="e.g. 3 weeks"></label>
+    <h2><span class="num">2</span>Chief complaint &amp; presenting symptoms</h2>
+    <fieldset class="plain">
+      <legend>Presentation <span class="req">required</span></legend>
+      <div class="choice-row big">
+        <label><input type="radio" name="presentation" value="false" required> Asymptomatic (routine screening)</label>
+        <label><input type="radio" name="presentation" value="true"> Symptomatic</label>
       </div>
-      <div class="sym-row">
-        <span class="sym-name">Nipple discharge</span>
-        <div class="choice-row">
-          <label><input type="radio" name="nd_side" value="" checked> None</label>
-          <label><input type="radio" name="nd_side" value="Right"> Right</label>
-          <label><input type="radio" name="nd_side" value="Left"> Left</label>
-          <label><input type="radio" name="nd_side" value="Both"> Both</label>
-        </div>
-        <div class="choice-row">
-          <label><input type="radio" name="nd_color" value="Bloody"> Bloody</label>
-          <label><input type="radio" name="nd_color" value="Clear"> Clear</label>
-          <label><input type="radio" name="nd_color" value="Milky"> Milky</label>
-        </div>
-      </div>
-      <div class="sym-row">
-        <span class="sym-name">Skin changes</span>
-        <div class="choice-row">
-          <label><input type="checkbox" name="skin" value="Dimpling"> Dimpling</label>
-          <label><input type="checkbox" name="skin" value="Retraction"> Retraction</label>
-          <label><input type="checkbox" name="skin" value="Scaling / Rash"> Scaling / rash</label>
-        </div>
-      </div>
-      <div class="sym-row">
-        <span class="sym-name">Pain / mastalgia</span>
-        <div class="choice-row">
-          <label><input type="radio" name="pain_type" value="" checked> None</label>
-          <label><input type="radio" name="pain_type" value="Cyclical"> Cyclical</label>
-          <label><input type="radio" name="pain_type" value="Non-cyclical"> Non-cyclical</label>
-        </div>
-        <label class="inline">Severity (1–10) <input id="pain_severity" type="number" min="1" max="10" class="narrow"></label>
-      </div>
+    </fieldset>
+    <div id="symptoms" class="sub grid" hidden>
+      <label class="field">Lump side
+        <select id="lump_side"><option value="">None</option><option>Right</option><option>Left</option><option>Both</option></select>
+      </label>
+      <label class="field" data-show="lump">Lump duration <input id="lump_duration" type="text" maxlength="50" placeholder="e.g. 3 weeks"></label>
+      <label class="field">Nipple discharge side
+        <select id="nipple_discharge_side"><option value="">None</option><option>Right</option><option>Left</option><option>Both</option></select>
+      </label>
+      <label class="field" data-show="discharge">Discharge colour
+        <select id="nipple_discharge_color"><option value="">Not recorded</option><option>Bloody</option><option>Clear</option><option>Milky</option></select>
+      </label>
+      <label class="field">Pain type
+        <select id="pain_type"><option value="">None</option><option>Cyclical</option><option>Non-cyclical</option></select>
+      </label>
+      <label class="field" data-show="pain">Pain severity (1–10) <input id="pain_severity" type="number" min="1" max="10"></label>
     </div>
   </section>
 
   <!-- 3 -->
   <section id="s3" class="block">
-    <h2><span class="num">3</span>Obstetric and gynaecological history</h2>
+    <h2><span class="num">3</span>Obstetric &amp; gynaecological history</h2>
     <div class="grid">
-      <label class="field">Age at menarche <input id="menarche_age" type="number" min="6" max="25"></label>
-      <div class="field span-2">Menopausal status
-        <div class="choice-row">
-          <label><input type="radio" name="menopausal_status" value="Premenopausal"> Premenopausal</label>
-          <label><input type="radio" name="menopausal_status" value="Perimenopausal"> Perimenopausal</label>
-          <label><input type="radio" name="menopausal_status" value="Postmenopausal"> Postmenopausal</label>
-        </div>
-      </div>
-      <label class="field" id="menopause_age_wrap" hidden>Age at menopause <input id="menopause_age" type="number" min="20" max="70"></label>
-      <label class="field">Total pregnancies (parity) <input id="parity" type="number" min="0" max="20"></label>
-      <label class="field">Age at first full-term birth <input id="age_first_birth" type="number" min="10" max="60"></label>
-      <div class="field span-2">Oral contraceptives (OCP)
-        <div class="choice-row">
-          <label><input type="radio" name="ocp" value="Current"> Current</label>
-          <label><input type="radio" name="ocp" value="Past"> Past</label>
-          <label><input type="radio" name="ocp" value="Never"> Never</label>
-        </div>
-      </div>
-      <div class="field">Hormone replacement therapy (HRT)
-        <div class="choice-row">
-          <label><input type="radio" name="hrt" value="yes"> Yes</label>
-          <label><input type="radio" name="hrt" value="no"> No</label>
-        </div>
-      </div>
-      <label class="field" id="hrt_duration_wrap" hidden>HRT duration (years)
-        <input id="hrt_duration_years" type="number" min="0" max="60" step="0.5">
+      <label class="field">Marital status <span class="req">required</span>
+        <select id="marital_status" required><option value="">Select…</option><option>Married</option><option>Unmarried</option></select>
       </label>
+      <label class="field">Age at menarche <input id="menarche_age" type="number" min="6" max="25"></label>
+      <label class="field" data-show="menopause-status">Menopausal status
+        <select id="menopausal_status"><option value="">Not recorded</option><option>Premenopausal</option><option>Perimenopausal</option><option>Postmenopausal</option></select>
+      </label>
+      <label class="field" data-show="menopause-age">Age at menopause <input id="menopause_age" type="number" min="20" max="70"></label>
+      <label class="field" data-show="married">Parity <input id="parity" type="number" min="0" max="20"></label>
+      <label class="field" data-show="married">Age at first full-term birth <input id="age_first_birth" type="number" min="10" max="60"></label>
+      <label class="field">Oral contraceptive use
+        <select id="ocp_use"><option value="">Not recorded</option><option>Current</option><option>Past</option><option>Never</option></select>
+      </label>
+      <label class="field" data-show="hrt">HRT <small>asked at age 45–55</small>
+        <select id="hrt_use"><option value="">Not recorded</option><option>Yes</option><option>No</option><option>Unknown</option></select>
+      </label>
+      <label class="field" data-show="hrt-years">HRT duration (years) <input id="hrt_duration_years" type="number" min="0" max="60" step="0.5"></label>
+      <label class="field" data-show="married">Breastfed <span class="req">required</span>
+        <select id="breastfeeding_history"><option value="">Select…</option><option>Yes</option><option>No</option><option>Unknown</option></select>
+      </label>
+      <label class="field" data-show="breastfed-years">Breastfeeding duration (years) <input id="breastfeeding_duration_years" type="number" min="0" max="30" step="0.5"></label>
     </div>
   </section>
 
   <!-- 4 -->
   <section id="s4" class="block">
-    <h2><span class="num">4</span>Personal and family medical history</h2>
+    <h2><span class="num">4</span>Personal medical history</h2>
 
-    <div class="field">Prior breast history
-      <div class="choice-row">
-        <label><input type="checkbox" id="prior_none" checked> None</label>
-        <label><input type="checkbox" name="prior" value="Biopsy"> Biopsy</label>
-        <label><input type="checkbox" name="prior" value="Lumpectomy"> Lumpectomy</label>
-        <label><input type="checkbox" name="prior" value="CystAspiration"> Cyst aspiration</label>
-        <label><input type="checkbox" name="prior" value="Implants"> Implants</label>
-      </div>
+    <h3>Breast history</h3>
+    <div id="breast_history_entries" class="repeat-list"></div>
+    <button type="button" class="add-btn" id="add_breast_entry">{{ icon('plus') }} Add breast history entry</button>
+    <div class="grid">
+      <label class="field">High-risk biopsy finding
+        <select id="high_risk_biopsy"><option value="">Not recorded</option><option>None</option><option>ADH</option><option>ALH</option><option>LCIS</option><option>Unknown</option></select>
+        <small>Atypical hyperplasia or LCIS puts the patient on the high-risk pathway</small>
+      </label>
     </div>
-    <label class="field" id="prior_details_wrap" hidden>Details / pathology findings
-      <input id="prior_breast_details" type="text" placeholder="e.g. benign fibroadenoma, left breast, 2015">
+
+    <h3>Medical history</h3>
+    <label class="check-line"><input type="checkbox" id="medical_history_yes"> The patient has other medical history</label>
+    <label class="field" id="medical_history_details_field" hidden>Medical history details <span class="req">required</span>
+      <textarea id="medical_history_details" rows="3" maxlength="2000"></textarea>
     </label>
 
-    <h3>Family history of breast cancer</h3>
-    <p class="hint">First- or second-degree blood relatives. Tick each relative and add their age at diagnosis.</p>
-    <div class="relatives">
-      {% for rel in ['Mother', 'Sister', 'Daughter', 'Maternal Aunt', 'Paternal Aunt'] %}
-      <div class="relative">
-        <label><input type="checkbox" name="relative" value="{{ rel }}"> {{ rel }}</label>
-        <label class="inline age" hidden>Age at diagnosis <input type="number" min="1" max="120" class="narrow"></label>
-      </div>
-      {% endfor %}
+    <h3>Body measurements</h3>
+    <div class="grid">
+      <label class="field">Height (cm) <span class="req">required</span> <input id="height_cm" type="number" min="100" max="230" step="0.1" required></label>
+      <label class="field">Weight (kg) <span class="req">required</span> <input id="weight_kg" type="number" min="25" max="300" step="0.1" required></label>
+      <div class="field">Calculated BMI <output id="bmi_out" class="derived">—</output></div>
     </div>
 
+    <h3>Chest radiation history</h3>
     <div class="grid">
-      <div class="field">Ovarian cancer in family
-        <div class="choice-row">
-          <label><input type="radio" name="ovarian" value="yes"> Yes</label>
-          <label><input type="radio" name="ovarian" value="no" checked> No</label>
-        </div>
-      </div>
-      <label class="field" id="ovarian_rel_wrap" hidden>Which relative?
-        <select id="ovarian_relation">
-          <option value="">Select relative</option>
-          <option>Mother</option><option>Sister</option><option>Daughter</option>
-          <option>Maternal Aunt</option><option>Paternal Aunt</option>
-          <option value="Unspecified">Not known</option>
-        </select>
+      <label class="field">Chest radiation <span class="req">required</span>
+        <select id="chest_radiation" required><option value="">Select…</option><option>No</option><option>Yes</option><option>Unknown</option></select>
       </label>
-      <div class="field span-2">Known genetic mutations
-        <div class="choice-row">
-          <label><input type="radio" name="genetic" value="BRCA1"> BRCA1</label>
-          <label><input type="radio" name="genetic" value="BRCA2"> BRCA2</label>
-          <label><input type="radio" name="genetic" value="Negative"> Tested negative</label>
-          <label><input type="radio" name="genetic" value="Unknown" checked> Not tested / unknown</label>
-        </div>
-      </div>
+      <label class="field" data-show="radiation">Age at radiation <input id="chest_radiation_age" type="number" min="1" max="100"></label>
+      <label class="field" data-show="radiation">Years since radiation <input id="chest_radiation_years" type="number" min="0" max="100"></label>
     </div>
 
-    <h3>Risk calculation inputs</h3>
+    <h3>Genetic history</h3>
     <div class="grid">
-      <label class="field">Height (cm) <input id="height_cm" type="number" min="100" max="230" step="0.1"></label>
-      <label class="field">Weight (kg) <input id="weight_kg" type="number" min="25" max="300" step="0.1"></label>
-      <div class="field">BMI <output id="bmi_out" class="derived">—</output></div>
+      <label class="field">Genetic test status <span class="req">required</span>
+        <select id="genetic_status" required><option value="">Select…</option><option>Never tested</option><option>Negative</option><option>Positive</option></select>
+      </label>
+      <label class="field" data-show="gene">Gene <span class="req">required</span>
+        <select id="genetic_gene"><option value="">Select…</option><option>BRCA1</option><option>BRCA2</option><option>TP53</option><option>PTEN</option><option>PALB2</option><option>Other</option></select>
+      </label>
+      <label class="field" data-show="gene-other">Other gene <input id="genetic_gene_other" type="text" maxlength="30"></label>
     </div>
 
     <fieldset id="geriatric" class="sub" hidden>
       <legend>Geriatric assessment (age 75 or over)</legend>
-      <div class="q-row">
-        <span>Active end-stage organ failure or advanced dementia?</span>
-        <div class="choice-row">
-          <label><input type="radio" name="ger_end" value="yes"> Yes</label>
-          <label><input type="radio" name="ger_end" value="no"> No</label>
-        </div>
-      </div>
-      <div class="q-row">
-        <span>Fully independent in daily living activities (ADLs)?</span>
-        <div class="choice-row">
-          <label><input type="radio" name="ger_adl" value="yes"> Yes</label>
-          <label><input type="radio" name="ger_adl" value="no"> No</label>
-        </div>
+      <div class="grid">
+        <label class="field">Active end-stage organ failure or advanced dementia? <span class="req">required</span>
+          <select id="geriatric_end_stage_failure"><option value="">Select…</option><option>Yes</option><option>No</option></select>
+        </label>
+        <label class="field">Fully independent in daily living activities (ADLs)? <span class="req">required</span>
+          <select id="geriatric_adl_independent"><option value="">Select…</option><option>Yes</option><option>No</option></select>
+        </label>
+        <label class="field">Life expectancy over 10 years? <small>clinician judgement</small>
+          <select id="geriatric_life"><option value="">Not assessed yet</option><option value="true">Yes</option><option value="false">No</option></select>
+        </label>
       </div>
     </fieldset>
   </section>
 
   <!-- 5 -->
   <section id="s5" class="block">
-    <h2><span class="num">5</span>Clinical breast examination</h2>
+    <h2><span class="num">5</span>Family history of cancer</h2>
+    <label class="check-line"><input type="checkbox" id="family_history_none"> No relevant family history</label>
+    <div id="family_entries" class="repeat-list"></div>
+    <button type="button" class="add-btn" id="add_family">{{ icon('plus') }} Add relative</button>
+  </section>
+
+  <!-- 6 -->
+  <section id="s6" class="block">
+    <h2><span class="num">6</span>Clinical breast examination (CBE)</h2>
+    <p class="hint">Complete both breasts. “Not answered” is not treated as normal.</p>
     <div class="table-wrap">
       <table class="cbe">
-        <thead>
-          <tr><th scope="col">Feature</th><th scope="col">Right breast</th><th scope="col">Left breast</th></tr>
-        </thead>
+        <thead><tr><th scope="col">Feature checked</th><th scope="col">Right breast</th><th scope="col">Left breast</th></tr></thead>
         <tbody>
           <tr>
             <th scope="row">Inspection<small>Contour, skin, nipple</small></th>
-            {% for s in ['R', 'L'] %}
+            {% for s, side in [('r', 'right'), ('l', 'left')] %}
             <td>
-              <div class="choice-row">
-                <label><input type="radio" name="cbe_{{ s }}_insp" value="normal" checked> Normal</label>
-                <label><input type="radio" name="cbe_{{ s }}_insp" value="abnormal"> Abnormal</label>
+              <select id="{{ s }}_inspection" aria-label="Inspection, {{ side }}"><option>Not answered</option><option>Normal</option><option>Abnormal</option></select>
+              <div class="cbe-more" id="{{ s }}_inspection_more" hidden>
+                <input id="{{ s }}_inspection_finding" type="text" maxlength="100" placeholder="Describe the finding" aria-label="Inspection finding, {{ side }}">
+                <select id="{{ s }}_nipple_discharge_color" aria-label="Nipple discharge colour, {{ side }}"><option value="">Nipple discharge colour</option><option>None</option><option>Bloody</option><option>Clear</option><option>Milky</option></select>
+                <select id="{{ s }}_skin_change" aria-label="Skin change, {{ side }}"><option value="">Skin change</option><option>Dimpling</option><option>Retraction</option><option>Scaling / rash</option></select>
               </div>
-              <input id="cbe_{{ s }}_insp_text" type="text" placeholder="Describe finding" hidden>
             </td>
             {% endfor %}
           </tr>
           <tr>
             <th scope="row">Palpation<small>Masses, nodularity</small></th>
-            {% for s in ['R', 'L'] %}
+            {% for s, side in [('r', 'right'), ('l', 'left')] %}
             <td>
-              <div class="choice-row">
-                <label><input type="radio" name="cbe_{{ s }}_mass" value="no" checked> No mass</label>
-                <label><input type="radio" name="cbe_{{ s }}_mass" value="yes"> Mass present</label>
+              <select id="{{ s }}_mass" aria-label="Palpation, {{ side }}"><option>Not answered</option><option value="Normal">No mass</option><option value="Abnormal">Mass present</option></select>
+              <div class="cbe-more" id="{{ s }}_mass_more" hidden>
+                <input id="{{ s }}_mass_size" type="number" min="1" max="300" placeholder="Size (mm)" aria-label="Mass size in mm, {{ side }}">
+                <select id="{{ s }}_mass_mobility" aria-label="Mobility, {{ side }}"><option value="">Mobility</option><option>Mobile</option><option>Fixed</option></select>
+                <select id="{{ s }}_mass_consistency" aria-label="Consistency, {{ side }}"><option value="">Consistency</option><option>Soft</option><option>Firm</option><option>Hard</option></select>
               </div>
-            </td>
-            {% endfor %}
-          </tr>
-          <tr>
-            <th scope="row">Mass details<small>Size, mobility, consistency</small></th>
-            {% for s in ['R', 'L'] %}
-            <td>
-              <div id="cbe_{{ s }}_details" class="mass-details" hidden>
-                <label class="inline">Size <input id="cbe_{{ s }}_size" type="number" min="1" max="300" class="narrow"> mm</label>
-                <div class="choice-row">
-                  <label><input type="radio" name="cbe_{{ s }}_mob" value="Mobile"> Mobile</label>
-                  <label><input type="radio" name="cbe_{{ s }}_mob" value="Fixed"> Fixed</label>
-                </div>
-                <select id="cbe_{{ s }}_cons" aria-label="Consistency">
-                  <option value="">Consistency</option>
-                  <option>Soft</option><option>Firm</option><option>Hard</option>
-                </select>
-              </div>
-              <span class="muted" id="cbe_{{ s }}_nodetail">No mass</span>
             </td>
             {% endfor %}
           </tr>
           <tr>
             <th scope="row">Axillary lymph nodes</th>
-            {% for s in ['R', 'L'] %}
-            <td>
-              <div class="choice-row">
-                <label><input type="radio" name="cbe_{{ s }}_node" value="no" checked> Not palpable</label>
-                <label><input type="radio" name="cbe_{{ s }}_node" value="yes"> Palpable</label>
-              </div>
-            </td>
+            {% for s, side in [('r', 'right'), ('l', 'left')] %}
+            <td><select id="{{ s }}_nodes" aria-label="Axillary lymph nodes, {{ side }}"><option>Not answered</option><option value="Normal">Not palpable</option><option value="Abnormal">Palpable</option></select></td>
             {% endfor %}
           </tr>
         </tbody>
@@ -274,53 +238,42 @@
     </div>
   </section>
 
-  <!-- 6 -->
-  <section id="s6" class="block">
-    <h2><span class="num">6</span>Imaging and radiologist assessment</h2>
-    <div class="field">Modality performed
-      <div class="choice-row">
-        <label><input type="checkbox" name="modality" value="Mammogram"> Mammogram (CC/MLO)</label>
-        <label><input type="checkbox" name="modality" value="DBT"> DBT (3D)</label>
-        <label><input type="checkbox" name="modality" value="Ultrasound"> Breast ultrasound</label>
-        <label><input type="checkbox" name="modality" value="MRI"> Breast MRI</label>
-      </div>
-    </div>
-    <div class="field">Breast density
-      <div class="choice-row">
-        <label><input type="radio" name="density" value="A"> A (fatty)</label>
-        <label><input type="radio" name="density" value="B"> B (scattered)</label>
-        <label><input type="radio" name="density" value="C"> C (heterogeneously dense)</label>
-        <label><input type="radio" name="density" value="D"> D (extremely dense)</label>
-      </div>
-    </div>
-
-    <div class="field">BI-RADS assessment
-      <p class="hint">Leave empty if imaging has not been reported yet.</p>
-      <div class="birads-scale" role="radiogroup">
-        <label class="tile t0"><input type="radio" name="birads" value="0"><b>0</b><span>Incomplete</span><small>Needs additional imaging</small></label>
-        <label class="tile t1"><input type="radio" name="birads" value="1"><b>1</b><span>Negative</span><small>Normal pattern</small></label>
-        <label class="tile t2"><input type="radio" name="birads" value="2"><b>2</b><span>Benign</span><small>e.g. simple cyst</small></label>
-        <label class="tile t3"><input type="radio" name="birads" value="3"><b>3</b><span>Probably benign</span><small>Short-interval follow-up</small></label>
-        <label class="tile t4"><input type="radio" name="birads" value="4"><b>4</b><span>Suspicious</span><small>Biopsy should be considered</small></label>
-        <label class="tile t5"><input type="radio" name="birads" value="5"><b>5</b><span>Highly suggestive</span><small>Of malignancy</small></label>
-      </div>
-      <button type="button" class="link-btn" id="clear_birads">Clear BI-RADS</button>
-    </div>
-  </section>
-
   <!-- 7 -->
   <section id="s7" class="block">
-    <h2><span class="num">7</span>Clinical plan and disposition</h2>
-    <div class="choice-col">
-      <label><input type="radio" name="disposition" value="RoutineRescreen"> Routine rescreening in 1–2 years</label>
-      <label><input type="radio" name="disposition" value="ShortTermFollowUp"> Short-term diagnostic follow-up
-        <span id="fu_wrap" hidden> in <input id="followup_months" type="number" min="1" max="24" class="narrow"> months</span>
-      </label>
-      <label><input type="radio" name="disposition" value="UrgentBiopsyReferral"> Urgent referral for tissue diagnosis (core needle biopsy / FNA)</label>
-    </div>
+    <h2><span class="num">7</span>Imaging assessment</h2>
+    <p class="hint">Add every scan separately. The latest scan decides the BI-RADS route; density applies to mammogram and DBT only.</p>
+    <label class="check-line"><input type="checkbox" id="imaging_not_done"> Imaging has not been done yet</label>
+    <div id="imaging_entries" class="repeat-list"></div>
+    <button type="button" class="add-btn" id="add_imaging">{{ icon('plus') }} Add imaging entry</button>
+  </section>
+
+  <!-- 8 -->
+  <section id="s8" class="block">
+    <h2><span class="num">8</span>Clinical plan &amp; disposition</h2>
+    <fieldset class="plain">
+      <legend>Plan <span class="req">select at least one</span></legend>
+      <div class="choice-col" id="plan_options">
+        {% for value in ["Standard Wellness & Awareness Tracking",
+                         "Routine Rescreening (Mammogram/DBT in 12–24 Months)",
+                         "Annual Breast MRI Only",
+                         "High-Risk Staggered Screening (Annual Mammogram + Annual MRI alternating every 6 months)",
+                         "Genetic Counseling & Testing Referral",
+                         "Short-Term Diagnostic Follow-up (Repeat Imaging at strict 6-Month mark)",
+                         "Urgent Referral for Tissue Diagnosis (Core Needle Biopsy)",
+                         "Stop Routine Screening (Switch to Symptomatic Care Plan only)"] %}
+        <label><input type="checkbox" name="plan" value="{{ value }}"> {{ value }}</label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <label class="field" id="followup_wrap" hidden>Follow-up interval (months)
+      <input id="followup_months" type="number" min="1" max="24" value="6" class="narrow">
+    </label>
+    <label class="field">Additional clinician notes
+      <textarea id="clinician_notes" rows="4" maxlength="2000"></textarea>
+    </label>
     <div class="grid">
-      <label class="field">Examiner name <input id="examiner_name" type="text"></label>
-      <label class="field">Date signed <input id="signed_date" type="date"></label>
+      <label class="field">Examiner name <span class="req">required</span> <input id="examiner_name" type="text" required maxlength="150"></label>
+      <label class="field">Date signed <span class="req">required</span> <input id="signed_date" type="date" required></label>
     </div>
   </section>
 
@@ -333,12 +286,13 @@
 <aside class="side">
   <nav class="toc" aria-label="Form sections">
     <a href="#s1">1 Demographics</a>
-    <a href="#s2">2 Symptoms</a>
+    <a href="#s2">2 Chief complaint</a>
     <a href="#s3">3 Obstetric history</a>
-    <a href="#s4">4 Medical history</a>
-    <a href="#s5">5 Breast exam</a>
-    <a href="#s6">6 Imaging</a>
-    <a href="#s7">7 Plan</a>
+    <a href="#s4">4 Personal medical history</a>
+    <a href="#s5">5 Family history</a>
+    <a href="#s6">6 Breast examination</a>
+    <a href="#s7">7 Imaging</a>
+    <a href="#s8">8 Plan</a>
   </nav>
   <div class="checks">
     <h2>Checks</h2>
@@ -347,16 +301,28 @@
 </aside>
 </div>
 
-<dialog id="saved_dialog">
-  <h2>Intake saved</h2>
+<dialog id="saved_dialog" class="saved" aria-labelledby="saved-h">
+  <h2 id="saved-h">Intake saved</h2>
   <p id="saved_text"></p>
+  <div class="saved-risk">
+    <p class="eyebrow">Risk tier</p>
+    <p id="risk_label" class="risk-pill"></p>
+    <p class="eyebrow">Alert</p>
+    <p id="risk_alert"></p>
+    <p class="eyebrow">Reasons</p>
+    <ul id="risk_reasons"></ul>
+    <p class="eyebrow">Doctor’s plan</p>
+    <ul id="doctor_plan"></ul>
+    <p class="eyebrow">Screening lane (rules engine)</p>
+    <p id="saved_lane"></p>
+  </div>
   <div class="dialog-actions">
-    <a id="saved_link" class="secondary" href="#">View record</a>
     <a href="/" class="secondary">Patient overview</a>
-    <button type="button" id="new_intake">Start a new intake</button>
+    <button type="button" class="primary-btn" id="new_intake">Start a new intake</button>
   </div>
 </dialog>
+{% endblock %}
 
-<script src="{{ url_for('static', path='intake.js') }}"></script>
-</body>
-</html>
+{% block scripts %}
+<script src="{{ url_for('static', path='intake.js') }}?v=2"></script>
+{% endblock %}

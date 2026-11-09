@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Log in{% endblock %}
+{% block public %}
+<div class="auth">
+  {% include "_auth_brand.html" %}
+  <section class="auth-panel">
+    <div class="auth-card">
+      <h2>Welcome back</h2>
+      <p class="lead">Log in to your Care Loop account.</p>
+      <form id="login" class="form" novalidate>
+        <label class="f-label">Username
+          <input id="username" type="text" autocomplete="username" required autofocus>
+        </label>
+        <label class="f-label">Password
+          <input id="password" type="password" autocomplete="current-password" required>
+        </label>
+        <div id="err" class="notice notice-error" role="alert" hidden></div>
+        <button class="btn btn-block" type="submit" id="submit">Log in</button>
+      </form>
+      <p class="auth-foot">New here? <a href="/signup">Create an account</a></p>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  document.getElementById("login").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const err = document.getElementById("err");
+    const btn = document.getElementById("submit");
+    const username = document.getElementById("username").value.trim();
+    const password = document.getElementById("password").value;
+    if (!username || !password) { err.textContent = "Enter your username and password."; err.hidden = false; return; }
+    busy(btn, true, "Logging in…");
+    const { ok } = await postJSON("/api/login", { username, password });
+    if (ok) { window.location.href = "/"; return; }
+    busy(btn, false);
+    err.textContent = "Wrong username or password. If you signed up as staff, your account may still be waiting for approval.";
+    err.hidden = false;
+  });
+</script>
+{% endblock %}

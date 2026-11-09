@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon %}
+{% block title %}Clinical plan · {{ patient.full_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', path='intake.css') }}">{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="crumb" href="/">{{ icon('back') }} Dashboard</a>
+    <h1>Clinical plan and disposition</h1>
+    <p>{{ patient.full_name }} · <span class="mono">{{ patient.patient_id }}</span> · age {{ age }}</p>
+  </div>
+  <div class="actions-row">
+    <a class="btn btn-secondary" href="/loop/{{ patient.patient_id }}">{{ icon('loop') }} Care loop</a>
+  </div>
+</div>
+
+<div class="layout">
+<form id="plan" data-pid="{{ patient.patient_id }}" data-suggested="{{ suggestion.disposition or '' }}" novalidate>
+  <input type="hidden" name="encounter_id" value="{{ enc.encounter_id }}">
+
+  <section class="block">
+    <h2>{{ patient.full_name }} <span class="muted">{{ patient.patient_id }} · age {{ age }}</span></h2>
+    <p class="hint">Latest visit {{ enc.encounter_date.strftime('%d %b %Y') }} · {{ 'Symptomatic' if enc.is_symptomatic else 'Asymptomatic' }}</p>
+    {% if imaging %}
+    <ul class="history">
+      {% for i in imaging %}
+      <li>BI-RADS {{ i.birads_category }} · {{ i.modality }} ({{ i.laterality }}){% if i.density %} · density {{ i.density }}{% endif %} · {{ i.result_released_at.strftime('%d %b %Y') }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">No imaging result recorded yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="block">
+    <h2><span class="num">7</span>Clinical plan and disposition</h2>
+    {% set current_disp = enc.disposition or suggestion.disposition %}
+    <div class="choice-col">
+      {% for code, label in labels.items() %}
+      <label><input type="radio" name="disposition" value="{{ code }}" {% if current_disp == code %}checked{% endif %}> {{ label }}</label>
+      {% endfor %}
+    </div>
+
+    <label class="field" id="fu_wrap" hidden style="margin-top:1rem">Follow-up in (months)
+      <input type="number" id="followup_months" name="followup_months" min="1" max="24" class="narrow" value="{{ enc.followup_months or '' }}">
+    </label>
+
+    <p id="differs_note" class="hint" style="margin-top:1rem"></p>
+
+    <div id="override_wrap" class="sub" hidden>
+      <label class="field">Reason for overriding the engine suggestion
+        <textarea id="override_reason" name="override_reason" rows="3" placeholder="Explain the clinical reason"></textarea>
+      </label>
+    </div>
+
+    <div class="grid">
+      <label class="field">Examiner name
+        <input type="text" name="examiner_name" value="{{ enc.examiner_name or '' }}">
+      </label>
+      <label class="field">Date signed
+        <input type="date" name="signed_date" value="{{ enc.signed_date or '' }}">
+      </label>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Clinical note</h2>
+    <p class="hint">Saved as a new version each time. Earlier versions stay in the record.</p>
+    <textarea name="clinical_note" rows="6" placeholder="Findings discussed, plan agreed with the patient, next steps"></textarea>
+  </section>
+
+  <div class="actions">
+    <div id="form_error" class="form-error" role="alert" hidden></div>
+    <button type="submit" id="save_btn">Save plan</button>
+  </div>
+</form>
+
+<aside class="side">
+  <div class="suggest">
+    <h2>Engine suggestion</h2>
+    <p><strong>{{ suggestion.lane }}</strong></p>
+    <p>{{ suggestion.reason }}</p>
+    {% if suggestion.disposition %}
+    <p class="hint">Suggested: {{ labels[suggestion.disposition] }}</p>
+    {% else %}
+    <p class="hint">No disposition suggested yet.</p>
+    {% endif %}
+    {% for f in suggestion.flags %}<p class="hint">⚠ {{ f }}</p>{% endfor %}
+    <p class="hint">Current lane: {% if current %}{{ current.lane }} ({{ current.assigned_by }}){% else %}none yet{% endif %}</p>
+  </div>
+
+  <div class="checks">
+    <h2>Previous notes</h2>
+    {% if notes %}
+    <ul class="history">
+      {% for n in notes %}
+      <li>
+        <small>{{ n.author }} · v{{ n.version_no }} · {{ n.created_at.strftime('%d %b %Y %H:%M') }}</small>
+        <p class="note-text">{{ n.note_text }}</p>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">No clinical notes yet.</p>
+    {% endif %}
+  </div>
+</aside>
+<section class="card" id="patient_note_card" style="grid-column:1" aria-labelledby="pn-h">
+  <div class="card-head">
+    <h2 id="pn-h">{{ icon('file') }} Note for the patient</h2>
+    <span class="pill pill-ai">{{ icon('sparkles') }} AI assisted</span>
+  </div>
+  <div class="card-pad form">
+    <p class="muted" style="margin:0">Write in plain language, or let the local AI draft it from your saved clinical note and plan.
+      Nothing reaches the patient until you press <strong>Release to patient</strong>.</p>
+    <label class="f-label">Patient-friendly note
+      <textarea id="patient_note" class="f-input" rows="6" maxlength="3000" placeholder="Save the clinical plan first, then draft or write the patient's version here."></textarea>
+    </label>
+    <div id="pn_ai" class="notice notice-ai small" hidden>
+      {{ icon('sparkles') }} Drafted by the local AI (<span id="pn_model"></span>). Check every fact against your note before releasing.
+    </div>
+    <div id="pn_err" class="notice notice-error" role="alert" hidden></div>
+    <div id="pn_ok" class="notice notice-ok" role="status" hidden></div>
+    <div class="actions-row">
+      <button class="btn btn-ai" type="button" id="pn_draft">{{ icon('sparkles') }} Draft with AI</button>
+      <button class="btn btn-ok" type="button" id="pn_release">{{ icon('check') }} Release to patient</button>
+    </div>
+  </div>
+</section>
+</div>
+
+<dialog id="saved_dialog">
+  <h2>Plan saved</h2>
+  <p id="saved_msg"></p>
+  <div class="dialog-actions">
+    <button type="button" class="btn" onclick="this.closest('dialog').close()">Close</button>
+  </div>
+</dialog>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', path='plan.js') }}"></script>
+<script>
+  (() => {
+    const pid = "{{ patient.patient_id }}";
+    const box = document.getElementById("patient_note");
+    const err = document.getElementById("pn_err"), okBox = document.getElementById("pn_ok"), ai = document.getElementById("pn_ai");
+    let aiDrafted = false, aiText = "";
+    const fail = (data) => { err.textContent = errorText(data); err.hidden = false; okBox.hidden = true; };
+
+    document.getElementById("pn_draft").addEventListener("click", async (e) => {
+      const btn = e.currentTarget; err.hidden = true; okBox.hidden = true;
+      if (box.value.trim() && !confirm("Replace the text in the box with a new AI draft?")) return;
+      busy(btn, true, "Drafting… (local AI, ~20 s)");
+      const { ok, data } = await postJSON(`/api/patients/${pid}/draft-note`);
+      busy(btn, false);
+      if (!ok) return fail(data);
+      box.value = data.draft; aiDrafted = true; aiText = data.draft;
+      document.getElementById("pn_model").textContent = data.model; ai.hidden = false;
+      box.focus();
+    });
+
+    document.getElementById("pn_release").addEventListener("click", async (e) => {
+      const btn = e.currentTarget; err.hidden = true;
+      const text = box.value.trim();
+      if (text.length < 10) return fail({ detail: "Write the note for the patient first." });
+      if (!confirm("Release this note to the patient? They will see it on their page.")) return;
+      busy(btn, true, "Releasing…");
+      const { ok, data } = await postJSON(`/api/patients/${pid}/release-note`, { note_text: text, ai_drafted: aiDrafted });
+      busy(btn, false);
+      if (!ok) return fail(data);
+      okBox.textContent = "Released. The patient can now read this note on their page.";
+      okBox.hidden = false; ai.hidden = true; box.value = ""; aiDrafted = false;
+    });
+  })();
+</script>
+{% endblock %}

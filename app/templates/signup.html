@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Create an account{% endblock %}
+{% block public %}
+<div class="auth">
+  {% include "_auth_brand.html" %}
+  <section class="auth-panel">
+    <div class="auth-card">
+      <h2>Create an account</h2>
+      <p class="lead">Patients can sign up straight away. Staff accounts are approved by an administrator.</p>
+
+      <div class="tabs" role="tablist" aria-label="Account type">
+        <button type="button" role="tab" id="tab-patient" aria-selected="true" aria-controls="form-patient">I'm a patient</button>
+        <button type="button" role="tab" id="tab-staff" aria-selected="false" aria-controls="form-staff">I'm hospital staff</button>
+      </div>
+
+      <form id="form-patient" class="form" role="tabpanel" aria-labelledby="tab-patient" style="margin-top:1.25rem" novalidate data-endpoint="/api/signup/patient">
+        <p class="notice notice-info small" style="margin:0">Enter the details from your hospital card so we can find your record.</p>
+        <label class="f-label">Patient ID <small>e.g. BC-HP-001</small>
+          <input name="patient_id" type="text" autocomplete="off" required>
+        </label>
+        <div class="row">
+          <label class="f-label">Date of birth
+            <input name="date_of_birth" type="date" required>
+          </label>
+          <label class="f-label">National ID
+            <input name="national_id" type="text" autocomplete="off" required>
+          </label>
+        </div>
+        <label class="f-label">Choose a username
+          <input name="username" type="text" autocomplete="username" required>
+        </label>
+        <label class="f-label">Password <small>At least 8 characters, with letters and numbers</small>
+          <input name="password" type="password" autocomplete="new-password" required>
+        </label>
+        <div class="notice notice-error" role="alert" hidden></div>
+        <button class="btn btn-block" type="submit">Create patient account</button>
+      </form>
+
+      <form id="form-staff" class="form" role="tabpanel" aria-labelledby="tab-staff" style="margin-top:1.25rem" novalidate hidden data-endpoint="/api/signup/staff">
+        <label class="f-label">Full name
+          <input name="full_name" type="text" autocomplete="name" required>
+        </label>
+        <label class="f-label">Role
+          <select name="role" required>
+            {% for value, label in staff_roles %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+          </select>
+        </label>
+        <label class="f-label">Choose a username
+          <input name="username" type="text" autocomplete="username" required>
+        </label>
+        <label class="f-label">Password <small>At least 8 characters, with letters and numbers</small>
+          <input name="password" type="password" autocomplete="new-password" required>
+        </label>
+        <div class="notice notice-error" role="alert" hidden></div>
+        <button class="btn btn-block" type="submit">Request staff account</button>
+      </form>
+
+      <div id="done" class="notice notice-ok" role="status" hidden style="margin-top:1.25rem"></div>
+      <p class="auth-foot">Already have an account? <a href="/login">Log in</a></p>
+    </div>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  const tabs = { patient: document.getElementById("tab-patient"), staff: document.getElementById("tab-staff") };
+  const forms = { patient: document.getElementById("form-patient"), staff: document.getElementById("form-staff") };
+  function show(which) {
+    for (const k of Object.keys(tabs)) {
+      tabs[k].setAttribute("aria-selected", String(k === which));
+      forms[k].hidden = k !== which;
+    }
+    document.getElementById("done").hidden = true;
+  }
+  tabs.patient.addEventListener("click", () => show("patient"));
+  tabs.staff.addEventListener("click", () => show("staff"));
+
+  for (const form of Object.values(forms)) {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = form.querySelector(".notice-error");
+      const btn = form.querySelector("button[type=submit]");
+      const body = Object.fromEntries(new FormData(form).entries());
+      for (const k in body) body[k] = typeof body[k] === "string" ? body[k].trim() : body[k];
+      const missing = [...form.querySelectorAll("[required]")].some((el) => !el.value.trim());
+      if (missing) { err.textContent = "Fill in every field."; err.hidden = false; return; }
+      err.hidden = true;
+      busy(btn, true, "Sending…");
+      const { ok, data } = await postJSON(form.dataset.endpoint, body);
+      busy(btn, false);
+      if (!ok) { err.textContent = errorText(data); err.hidden = false; return; }
+      form.reset();
+      form.hidden = true;
+      const done = document.getElementById("done");
+      done.innerHTML = data.status === "active"
+        ? `${data.message} <a href="/login">Go to log in</a>`
+        : data.message;
+      done.hidden = false;
+    });
+  }
+</script>
+{% endblock %}

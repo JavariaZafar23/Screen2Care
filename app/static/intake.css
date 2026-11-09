@@ -1,55 +1,9 @@
-:root {
-  --paper: #f2f5f4;
-  --surface: #ffffff;
-  --ink: #17323a;
-  --muted: #5b6e72;
-  --line: #d3dcda;
-  --accent: #2f5d8c;
-  --accent-soft: #e6eef7;
-  --warn: #8a5300;   --warn-bg: #fbf0dc;
-  --crit: #9c2a2a;   --crit-bg: #fbeaea;
-  --ok: #1d6b52;     --ok-bg: #e3f3ec;
-  /* BI-RADS severity ladder */
-  --b0: #8a5300; --b1: #1d6b52; --b2: #3d7a5c; --b3: #a06a00; --b4: #b0482b; --b5: #9c2a2a;
-  color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #121a1c; --surface: #1a2427; --ink: #e3ecea; --muted: #9db0b2; --line: #2f3e41;
-    --accent: #8fb6e0; --accent-soft: #1f3247;
-    --warn: #f0be6b; --warn-bg: #3a2a0c;
-    --crit: #f2a3a3; --crit-bg: #3d1717;
-    --ok: #7dd3b1;   --ok-bg: #11342a;
-    --b0: #f0be6b; --b1: #7dd3b1; --b2: #9fd8bd; --b3: #f3c56a; --b4: #f4a283; --b5: #f2a3a3;
-    color-scheme: dark;
-  }
-}
-
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
-  font-size: 15px;
-  line-height: 1.5;
-  background: var(--paper);
-  color: var(--ink);
-}
-input, select, button { font: inherit; color: inherit; }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-/* Top bar */
-.topbar {
-  display: flex; align-items: baseline; gap: 1.5rem; flex-wrap: wrap;
-  padding: 1rem 2rem; background: var(--surface); border-bottom: 1px solid var(--line);
-}
-.topbar h1 { margin: 0; font-size: 1.25rem; font-weight: 600; }
-.back { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
-.back::before { content: "‹ "; }
+/* Form components for the intake and clinical-plan pages. Colours and layout shell: app.css */
 
 /* Layout: form + sticky side panel */
 .layout {
   display: grid; grid-template-columns: minmax(0, 52rem) 17rem; gap: 2rem;
-  max-width: 74rem; margin: 0 auto; padding: 1.5rem 2rem 6rem;
+  max-width: 74rem; margin: 0; padding: 0 0 6rem;
 }
 .side { position: sticky; top: 1rem; align-self: start; display: grid; gap: 1.25rem; }
 
@@ -73,12 +27,12 @@ input, select, button { font: inherit; color: inherit; }
 .grid .field { margin-bottom: 0; }
 .field small { font-weight: 400; color: var(--muted); font-size: 0.8rem; }
 .req { font-weight: 400; color: var(--muted); font-size: 0.78rem; margin-left: 0.25rem; }
-input[type="text"], input[type="number"], input[type="date"], select {
+input[type="text"], input[type="number"], input[type="date"], input[type="tel"], select {
   width: 100%; padding: 0.5rem 0.65rem; border: 1px solid var(--line); border-radius: 4px;
   background: var(--surface); font-weight: 400;
 }
 input:focus, select:focus { border-color: var(--accent); }
-input.invalid { border-color: var(--crit); background: var(--crit-bg); }
+input.invalid, select.invalid, textarea.invalid { border-color: var(--crit); background: var(--crit-bg); }
 .narrow { width: 5.5rem !important; }
 .derived {
   display: block; padding: 0.5rem 0.65rem; border-radius: 4px; background: var(--paper);
@@ -179,7 +133,7 @@ dialog h2 { margin: 0 0 0.5rem; font-size: 1.15rem; }
 [hidden] { display: none !important; }
 
 @media (max-width: 960px) {
-  .layout { grid-template-columns: minmax(0, 1fr); padding: 1rem 1rem 6rem; }
+  .layout { grid-template-columns: minmax(0, 1fr); padding: 0 0 6rem; }
   .side { position: static; order: -1; }
   .toc { display: none; }
   .birads-scale { grid-template-columns: repeat(3, 1fr); }
@@ -194,4 +148,85 @@ dialog h2 { margin: 0 0 0.5rem; font-size: 1.15rem; }
 }
 @media (prefers-reduced-motion: no-preference) {
   html { scroll-behavior: smooth; }
+}
+
+/* Clinical plan page */
+.suggest { background: var(--accent-soft); border-left: 3px solid var(--accent); padding: 0.9rem 1rem; border-radius: 0 6px 6px 0; font-size: 0.9rem; }
+.suggest h2 { font-size: 0.95rem; margin: 0 0 0.4rem; }
+.suggest p { margin: 0.3rem 0; }
+.note-text { white-space: pre-wrap; margin: 0.25rem 0 0; }
+textarea {
+  width: 100%; padding: 0.6rem 0.7rem; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--surface); color: var(--ink); font: inherit; resize: vertical;
+}
+.sub textarea { background: var(--surface); }
+
+/* ---------- Intake v2 (screen2care proforma) ---------- */
+.form-intro {
+  margin-bottom: 1rem; padding: 0.8rem 1rem; border-radius: 6px; font-size: 0.9rem;
+  background: var(--accent-soft); border-left: 3px solid var(--accent);
+}
+fieldset.plain { border: 0; margin: 0 0 0.5rem; padding: 0; min-width: 0; }
+fieldset.plain legend { font-weight: 500; font-size: 0.9rem; margin-bottom: 0.5rem; padding: 0; }
+.sub.grid { margin-top: 1rem; }
+.check-line { display: inline-flex; align-items: center; gap: 0.45rem; margin: 0.25rem 0 0.75rem; cursor: pointer; }
+
+/* Repeating rows: breast history, relatives, scans */
+.repeat-list { display: grid; gap: 0.6rem; margin-bottom: 0.6rem; }
+.repeat-list:empty { display: none; }
+.repeat-row {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.75rem 1rem;
+  padding: 0.85rem 1rem; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2);
+}
+.repeat-row .field { margin: 0; flex: 1 1 10rem; }
+.repeat-row .field.grow { flex: 3 1 16rem; }
+.repeat-row .remove {
+  background: none; border: 1px solid var(--line); border-radius: 4px; padding: 0.45rem 0.8rem;
+  color: var(--crit); cursor: pointer; font: inherit; font-size: 0.85rem;
+}
+.add-btn {
+  display: inline-flex; align-items: center; gap: 0.35rem; background: none; cursor: pointer;
+  border: 1px dashed var(--accent); border-radius: 4px; padding: 0.45rem 0.85rem;
+  color: var(--accent); font: inherit; font-size: 0.88rem; font-weight: 500;
+}
+.add-btn .icon { width: 1rem; height: 1rem; }
+
+/* Breast exam extra details */
+.cbe td select { margin-bottom: 0.4rem; }
+.cbe-more { display: grid; gap: 0.4rem; padding-top: 0.2rem; }
+
+/* Previous intakes (read-only) */
+.history-block { background: var(--surface-2); }
+.readonly-badge {
+  font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 999px;
+  background: var(--paper); color: var(--muted); border: 1px solid var(--line);
+}
+.history-card { border: 1px solid var(--line); border-radius: 6px; background: var(--surface); margin-top: 0.5rem; }
+.history-card summary { cursor: pointer; padding: 0.7rem 0.9rem; font-weight: 500; font-size: 0.9rem; }
+.history-card dl {
+  display: grid; grid-template-columns: minmax(9rem, 14rem) 1fr; gap: 0.35rem 1rem;
+  margin: 0; padding: 0.2rem 0.9rem 0.9rem; font-size: 0.85rem;
+}
+.history-card dt { color: var(--muted); }
+.history-card dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Dialog buttons and saved summary */
+.primary-btn {
+  padding: 0.6rem 1.2rem; border: 0; border-radius: 4px; background: var(--accent); color: var(--accent-ink);
+  font: inherit; font-weight: 600; cursor: pointer;
+}
+dialog .secondary { background: none; border: 0; cursor: pointer; font: inherit; }
+dialog.saved { max-width: 34rem; width: calc(100% - 2rem); }
+.saved-risk { border-top: 1px solid var(--line); margin-top: 0.75rem; padding-top: 0.25rem; }
+.saved-risk .eyebrow { margin: 0.9rem 0 0.25rem; }
+.saved-risk p, .saved-risk ul { margin: 0; font-size: 0.9rem; }
+.saved-risk ul { padding-left: 1.1rem; }
+.risk-pill { display: inline-block; padding: 0.2rem 0.7rem; border-radius: 999px; font-weight: 700; }
+.risk-high { background: var(--crit-bg); color: var(--crit); }
+.risk-medium { background: var(--warn-bg); color: var(--warn); }
+.risk-low { background: var(--ok-bg); color: var(--ok); }
+.risk-incomplete { background: var(--paper); color: var(--muted); }
+@media (max-width: 560px) {
+  .history-card dl { grid-template-columns: 1fr; }
+  .history-card dd { margin-bottom: 0.4rem; }
 }
