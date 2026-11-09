@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Body, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -19,13 +19,13 @@ from app.auth import (
     COOKIE_NAME, TOKEN_HOURS, authenticate, create_token, get_current_user, require_role,
 )
 from app.database import engine
-from app.intake import lookup_patient, save_intake
+from app.intake import clinical_form, lookup_patient, save_intake
+from app import registration
 from app.patient_portal import get_portal
 from app.plan import (
     DISPOSITION_LABELS, PlanIn, ReleaseNoteIn, get_plan_page, note_source_text, release_patient_note, save_plan,
 )
 from app.rules_runner import run_engine
-from app.schemas import IntakeForm
 
 BASE_DIR = Path(__file__).parent
 
@@ -69,7 +69,9 @@ def nav_for(user: dict) -> list[tuple[str, str, str]]:
         return [("My record", "/", "home")]
     items = [("Dashboard", "/", "home")]
     if role == "Admin":
-        items += [("New intake", "/intake", "plus"), ("Account requests", "/admin/accounts", "users")]
+        items += [("Register patient", "/register", "plus"), ("Account requests", "/admin/accounts", "users")]
+    if role == "Clinician":
+        items.append(("Clinical intake", "/intake", "plus"))
     if role in llm.ASSISTANT_ROLES:
         items.append(("Care Assistant", "/assistant", "chat"))
     return items
@@ -142,26 +144,52 @@ def dashboard(request: Request, user: dict = Depends(get_current_user)):
                 results_due=care_loop.results_to_discuss(*scope_filter(user))
                 if user["role"] in care_loop.STEP_ROLES["book_results"] else [],
                 list_title=LIST_TITLES.get(user["role"], "Patients"),
+                waiting_intake=registration.waiting_for_intake(user.get("staff_id"))
+                if user["role"] == "Clinician" else [],
                 pending_accounts=len(accounts.pending_requests()) if user["role"] == "Admin" else 0)
 
 
+# ---------- Front desk: registration (Admin, demographics only) ----------
+
+@app.get("/register", response_class=HTMLResponse)
+def register_page(request: Request, user: dict = Depends(require_role("Admin"))):
+    return page(request, "register.html", user, clinicians=registration.active_clinicians())
+
+
+@app.post("/api/registration", status_code=201)
+def post_registration(data: registration.RegistrationIn, user: dict = Depends(require_role("Admin"))):
+    return registration.register_patient(data, user.get("staff_id"))
+
+
+@app.get("/api/registration/patients/{patient_id}")
+def registration_lookup(patient_id: str, user: dict = Depends(require_role("Admin"))):
+    return registration.lookup_registration(patient_id)
+
+
+# ---------- Clinician: clinical proforma, including the imaging report and BI-RADS ----------
+
 @app.get("/intake", response_class=HTMLResponse)
-def intake_form(request: Request, user: dict = Depends(require_role("Admin"))):
-    return page(request, "intake.html", user)
+def intake_form(request: Request, user: dict = Depends(require_role("Clinician"))):
+    return page(request, "intake.html", user, waiting=registration.waiting_for_intake(user.get("staff_id")))
 
 
 @app.post("/api/intake", status_code=201)
-def submit_intake(form: IntakeForm, user: dict = Depends(require_role("Admin"))):
-    saved = save_intake(form)
-    # Evaluate straight away so a BI-RADS 4/5 result starts the S1 clock without waiting for anyone
+def submit_intake(payload: dict = Body(...), user: dict = Depends(require_role("Clinician"))):
+    pid = str(payload.get("patient_id") or "").strip().upper()
+    if pid:
+        ensure_patient_access(user, pid)
+    form = clinical_form(payload, user)
+    saved = save_intake(form, user.get("staff_id"))
+    # Evaluate straight away: BI-RADS 4/5 opens the care loop (biopsy) and starts the S1 clock
     if not saved.get("duplicate"):
         saved["lane"] = run_engine(saved["patient_id"])["lane"]
     return saved
 
 
 @app.get("/api/intake/patients/{patient_id}")
-def intake_lookup(patient_id: str, user: dict = Depends(require_role("Admin"))):
-    """Find an existing patient from the intake form: demographics and earlier intakes."""
+def intake_lookup(patient_id: str, user: dict = Depends(require_role("Clinician"))):
+    """Load a registered patient into the proforma: demographics and earlier intakes."""
+    ensure_patient_access(user, patient_id.strip().upper())
     return lookup_patient(patient_id)
 
 

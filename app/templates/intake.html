@@ -1,22 +1,22 @@
 {% extends "base.html" %}
 {% from "_ui.html" import icon %}
-{% block title %}New patient intake{% endblock %}
-{% block head %}<link rel="stylesheet" href="{{ url_for('static', path='intake.css') }}?v=2">{% endblock %}
+{% block title %}Clinical intake{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', path='intake.css') }}?v=3">{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
     <a class="crumb" href="/">{{ icon('back') }} Dashboard</a>
     <h1>Breast screening clinical proforma</h1>
-    <p>New patient intake. Complete the sections in order. A BI-RADS 4 or 5 result starts the care loop as soon as you save.</p>
+    <p>For a patient registered at the front desk. Record the history, examination and imaging report. A BI-RADS 4 or 5 result opens the care loop (biopsy) as soon as you save.</p>
   </div>
   <div class="actions-row">
-    <button class="btn btn-secondary" type="button" id="open_lookup">{{ icon('search') }} Find existing patient</button>
+    <button class="btn btn-secondary" type="button" id="open_lookup">{{ icon('search') }} Find patient by ID</button>
   </div>
 </div>
 
 <dialog id="patient_lookup" aria-labelledby="lookup-h">
   <h2 id="lookup-h">Find patient record</h2>
-  <p class="hint">Enter an existing Patient ID to load their details. Earlier intake forms are shown read-only; this form becomes a new visit.</p>
+  <p class="hint">Enter the Patient ID of one of your patients. Earlier intake forms are shown read-only; this form becomes a new visit.</p>
   <label class="field">Patient ID
     <input id="lookup_patient_id" type="text" placeholder="BC-HP-001" autocomplete="off">
   </label>
@@ -40,30 +40,28 @@
 
   <!-- 1 -->
   <section id="s1" class="block">
-    <h2><span class="num">1</span>Patient demographics &amp; baseline data</h2>
+    <h2><span class="num">1</span>Patient</h2>
+    <p class="hint">Demographics are entered at registration. Ask the front desk to correct them if something is wrong.</p>
     <div class="grid">
-      <label class="field span-2">Full name <span class="req">required</span>
-        <input id="full_name" type="text" required maxlength="150">
-      </label>
-      <label class="field">Date of birth <span class="req">required</span>
-        <input id="date_of_birth" type="date" required>
-      </label>
-      <div class="field">Calculated age <output id="age_out" class="derived">—</output></div>
-      <label class="field">Patient ID
-        <input id="patient_id" type="text" pattern="BC-([A-Z]{2}-[0-9]{3}|[0-9]{5})" placeholder="BC-HP-001">
-        <small>Leave empty for a new patient; an ID is created on save</small>
-      </label>
-      <label class="field">Phone number <span class="req">required</span>
-        <input id="phone" type="tel" required minlength="7" maxlength="30">
-      </label>
-      <label class="field">National ID (CNIC)
-        <input id="national_id" type="text" maxlength="30">
-        <small>Lets the patient create their own login later</small>
+      <label class="field span-2">Patient <span class="req">required</span>
+        <select id="patient_pick" required>
+          <option value="">Select a registered patient…</option>
+          {% for w in waiting %}<option value="{{ w.patient_id }}">{{ w.full_name }} · {{ w.patient_id }} (waiting)</option>{% endfor %}
+        </select>
+        <small>{% if waiting %}Patients the front desk sent to you are listed here. {% endif %}Use “Find patient by ID” for anyone else on your list.</small>
       </label>
       <label class="field">Evaluation date <span class="req">required</span>
         <input id="evaluation_date" type="date" required>
       </label>
     </div>
+    <dl id="patient_card" class="patient-card" hidden>
+      <div><dt>Name</dt><dd id="pc_name"></dd></div>
+      <div><dt>Patient ID</dt><dd id="pc_id" class="mono"></dd></div>
+      <div><dt>Date of birth</dt><dd id="pc_dob"></dd></div>
+      <div><dt>Age</dt><dd><output id="age_out" class="derived">—</output></dd></div>
+      <div><dt>Phone</dt><dd id="pc_phone"></dd></div>
+    </dl>
+    <input id="date_of_birth" type="hidden">
   </section>
 
   <!-- 2 -->
@@ -272,7 +270,7 @@
       <textarea id="clinician_notes" rows="4" maxlength="2000"></textarea>
     </label>
     <div class="grid">
-      <label class="field">Examiner name <span class="req">required</span> <input id="examiner_name" type="text" required maxlength="150"></label>
+      <div class="field">Examiner <output class="derived">{{ user.name }}</output><small>The logged-in clinician signs the form</small></div>
       <label class="field">Date signed <span class="req">required</span> <input id="signed_date" type="date" required></label>
     </div>
   </section>
@@ -285,7 +283,7 @@
 
 <aside class="side">
   <nav class="toc" aria-label="Form sections">
-    <a href="#s1">1 Demographics</a>
+    <a href="#s1">1 Patient</a>
     <a href="#s2">2 Chief complaint</a>
     <a href="#s3">3 Obstetric history</a>
     <a href="#s4">4 Personal medical history</a>
@@ -317,12 +315,13 @@
     <p id="saved_lane"></p>
   </div>
   <div class="dialog-actions">
-    <a href="/" class="secondary">Patient overview</a>
+    <a href="/" class="secondary">Dashboard</a>
+    <a href="#" class="secondary" id="open_loop" hidden>Open care loop</a>
     <button type="button" class="primary-btn" id="new_intake">Start a new intake</button>
   </div>
 </dialog>
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', path='intake.js') }}?v=2"></script>
+<script src="{{ url_for('static', path='intake.js') }}?v=3"></script>
 {% endblock %}

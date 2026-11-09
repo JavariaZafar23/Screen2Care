@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon %}
+{% block title %}Register patient{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', path='intake.css') }}?v=3">{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="crumb" href="/">{{ icon('back') }} Dashboard</a>
+    <h1>Register patient</h1>
+    <p>Front desk: record who the patient is and which clinician will see them. The clinician completes the examination, imaging report and plan.</p>
+  </div>
+  <div class="actions-row">
+    <button class="btn btn-secondary" type="button" id="open_lookup">{{ icon('search') }} Find existing patient</button>
+  </div>
+</div>
+
+<dialog id="patient_lookup" aria-labelledby="lookup-h">
+  <h2 id="lookup-h">Find patient record</h2>
+  <p class="hint">Enter a Patient ID to load their details for a new visit.</p>
+  <label class="field">Patient ID
+    <input id="lookup_patient_id" type="text" placeholder="BC-HP-001" autocomplete="off">
+  </label>
+  <div id="lookup_message" class="form-error" role="alert" hidden></div>
+  <div class="dialog-actions">
+    <button type="button" class="secondary" id="cancel_lookup">Cancel</button>
+    <button type="button" class="primary-btn" id="find_patient">Find patient</button>
+  </div>
+</dialog>
+
+<form id="register" class="register-form" novalidate autocomplete="off">
+  <section class="block">
+    <h2><span class="num">1</span>Patient demographics</h2>
+    <div class="grid">
+      <label class="field span-2">Full name <span class="req">required</span>
+        <input id="full_name" type="text" required minlength="2" maxlength="150">
+      </label>
+      <label class="field">Date of birth <span class="req">required</span>
+        <input id="date_of_birth" type="date" required>
+      </label>
+      <div class="field">Age <output id="age_out" class="derived">—</output><small>Calculated from the date of birth</small></div>
+      <label class="field">Patient ID
+        <input id="patient_id" type="text" pattern="BC-([A-Z]{2}-[0-9]{3}|[0-9]{5})" placeholder="BC-HP-001">
+        <small>Leave empty for a new patient; an ID is created on save. For a returning patient use “Find existing patient”.</small>
+      </label>
+      <label class="field">Phone number <span class="req">required</span>
+        <input id="phone" type="tel" required minlength="7" maxlength="30">
+      </label>
+      <label class="field">National ID (CNIC)
+        <input id="national_id" type="text" maxlength="30">
+        <small>Lets the patient create their own login later</small>
+      </label>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2><span class="num">2</span>Send to clinician</h2>
+    <div class="grid">
+      <label class="field span-2">Clinician <span class="req">required</span>
+        <select id="clinician_staff_id" required>
+          <option value="">Select…</option>
+          {% for c in clinicians %}<option value="{{ c.staff_id }}">{{ c.full_name }}</option>{% endfor %}
+        </select>
+        <small id="current_team">The patient appears on this clinician's dashboard, waiting for the clinical intake</small>
+      </label>
+    </div>
+  </section>
+
+  <div class="actions">
+    <div id="form_error" class="form-error" role="alert" hidden></div>
+    <button type="submit" id="save_btn">Register patient</button>
+  </div>
+</form>
+
+<dialog id="saved_dialog" class="saved" aria-labelledby="saved-h">
+  <h2 id="saved-h">Patient registered</h2>
+  <p id="saved_text"></p>
+  <div class="dialog-actions">
+    <a href="/" class="secondary">Dashboard</a>
+    <button type="button" class="primary-btn" id="new_reg">Register another patient</button>
+  </div>
+</dialog>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const form = $("register");
+  const val = (id) => $(id).value.trim() || null;
+  let loaded = null;   // Patient ID loaded with "Find existing patient"
+  const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  $("date_of_birth").max = today;
+
+  function showAge() {
+    const dob = val("date_of_birth");
+    if (!dob) { $("age_out").textContent = "—"; return; }
+    const d = new Date(dob), t = new Date();
+    let a = t.getFullYear() - d.getFullYear();
+    if (t.getMonth() < d.getMonth() || (t.getMonth() === d.getMonth() && t.getDate() < d.getDate())) a--;
+    $("age_out").textContent = a >= 0 && a < 130 ? a : "—";
+  }
+  $("date_of_birth").addEventListener("input", showAge);
+
+  function showErrors(messages) {
+    const box = $("form_error");
+    box.replaceChildren();
+    if (messages.length) {
+      const ul = document.createElement("ul");
+      messages.forEach((m) => { const li = document.createElement("li"); li.textContent = m; ul.appendChild(li); });
+      box.appendChild(ul);
+    }
+    box.hidden = !messages.length;
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const bad = [...form.querySelectorAll("input, select")].filter((c) => !c.checkValidity());
+    form.querySelectorAll(".invalid").forEach((c) => c.classList.remove("invalid"));
+    bad.forEach((c) => c.classList.add("invalid"));
+    if (bad.length) {
+      showErrors([`Please complete: ${bad.map((c) => c.closest("label").childNodes[0].textContent.trim()).join(", ")}.`]);
+      bad[0].focus();
+      return;
+    }
+    showErrors([]);
+    const btn = $("save_btn");
+    btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      const res = await fetch("/api/registration", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          full_name: val("full_name"), date_of_birth: val("date_of_birth"),
+          patient_id: val("patient_id")?.toUpperCase() ?? null, phone: val("phone"),
+          national_id: val("national_id"), clinician_staff_id: Number(val("clinician_staff_id")), update_existing: loaded !== null && loaded === val("patient_id")?.toUpperCase(),
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showErrors(Array.isArray(body.detail)
+          ? body.detail.map((d) => `${(d.loc || []).filter((x) => x !== "body").join(" ").replaceAll("_", " ")}: ${(d.msg || "").replace(/^Value error, /, "")}`)
+          : [body.detail || "The patient could not be registered."]);
+        return;
+      }
+      $("saved_text").textContent = (body.returning_patient
+        ? `Returning patient ${body.patient_id} checked in.`
+        : `New patient registered with ID ${body.patient_id}.`) +
+        ` They are now waiting for the clinical intake on ${body.clinician}'s dashboard.`;
+      $("saved_dialog").showModal();
+    } catch {
+      showErrors(["The server could not be reached. Check that the app is running, then save again."]);
+    } finally {
+      btn.disabled = false; btn.textContent = "Register patient";
+    }
+  });
+
+  $("new_reg").addEventListener("click", () => {
+    $("saved_dialog").close(); form.reset(); loaded = null; showAge(); showErrors([]);
+    $("current_team").textContent = "The patient appears on this clinician's dashboard, waiting for the clinical intake";
+    window.scrollTo(0, 0);
+  });
+
+  // Find an existing patient (demographics only)
+  const lookup = $("patient_lookup");
+  $("open_lookup").addEventListener("click", () => { $("lookup_message").hidden = true; lookup.showModal(); $("lookup_patient_id").focus(); });
+  $("cancel_lookup").addEventListener("click", () => lookup.close());
+  $("lookup_patient_id").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); find(); } });
+  $("find_patient").addEventListener("click", find);
+  async function find() {
+    const id = $("lookup_patient_id").value.trim().toUpperCase();
+    const msg = $("lookup_message");
+    msg.hidden = true;
+    if (!id) { msg.textContent = "Enter a Patient ID."; msg.hidden = false; return; }
+    const res = await fetch(`/api/registration/patients/${encodeURIComponent(id)}`);
+    if (!res.ok) { msg.textContent = res.status === 404 ? "No patient with that ID." : "The record could not be loaded."; msg.hidden = false; return; }
+    const { patient, clinicians } = await res.json();
+    form.reset();
+    for (const k of ["patient_id", "full_name", "date_of_birth", "phone", "national_id"]) $(k).value = patient[k] || "";
+    if (clinicians.length) {
+      $("clinician_staff_id").value = String(clinicians[clinicians.length - 1].staff_id);
+      $("current_team").textContent = `Currently with: ${clinicians.map((c) => c.full_name).join(", ")}`;
+    }
+    loaded = patient.patient_id;
+    showAge();
+    lookup.close();
+  }
+})();
+</script>
+{% endblock %}

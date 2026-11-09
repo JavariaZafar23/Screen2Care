@@ -16,7 +16,8 @@
     <p>{{ list_title }}</p>
   </div>
   <div class="actions-row">
-    {% if user.role == 'Admin' %}<a class="btn" href="/intake">{{ icon('plus') }} New patient intake</a>{% endif %}
+    {% if user.role == 'Admin' %}<a class="btn" href="/register">{{ icon('plus') }} Register patient</a>{% endif %}
+    {% if user.role == 'Clinician' %}<a class="btn" href="/intake">{{ icon('plus') }} Clinical intake</a>{% endif %}
     {% if nav | selectattr(1, 'equalto', '/assistant') | list %}<a class="btn btn-secondary" href="/assistant">{{ icon('sparkles') }} Ask the Care Assistant</a>{% endif %}
   </div>
 </div>
@@ -83,6 +84,28 @@
   {% else %}
   <div class="empty-state">{{ icon('check') }}<br>No open alerts. Every clock you own is on time.</div>
   {% endif %}
+</section>
+{% endif %}
+
+{% if waiting_intake %}
+<section class="card" aria-labelledby="waiting-h" style="margin-bottom:1.5rem">
+  <div class="card-head">
+    <h2 id="waiting-h">{{ icon('file') }} Registered, waiting for your clinical intake
+      <span class="count">{{ waiting_intake | length }}</span></h2>
+  </div>
+  <ul class="alert-list">
+    {% for w in waiting_intake %}
+    <li class="alert-item notify unseen">
+      <span class="sec" aria-hidden="true">{{ icon('file') }}</span>
+      <div>
+        <h3>{{ w.full_name }} <span class="id mono muted">{{ w.patient_id }}</span></h3>
+        <p>Age {{ w.age }}. Registered at the front desk and assigned to you.</p>
+        <div class="meta">Registered {{ w.registered_at.strftime('%d %b %Y %H:%M') }}</div>
+      </div>
+      <div><a class="btn btn-sm" href="/intake?patient={{ w.patient_id }}">Start intake</a></div>
+    </li>
+    {% endfor %}
+  </ul>
 </section>
 {% endif %}
 

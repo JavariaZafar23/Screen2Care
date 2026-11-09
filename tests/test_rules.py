@@ -148,6 +148,7 @@ def remove_intake_patient():
     enc = "(SELECT encounter_id FROM encounter WHERE patient_id = :p)"
     for q in ["DELETE FROM lane_assignment WHERE patient_id = :p",
               "DELETE FROM event_log WHERE patient_id = :p",
+              "DELETE FROM care_team_assignment WHERE patient_id = :p",
               "DELETE FROM risk_assessment WHERE patient_id = :p",
               "DELETE FROM encounter_snapshot WHERE patient_id = :p",
               "DELETE FROM plan_items WHERE patient_id = :p",
@@ -170,8 +171,7 @@ def test_intake_form_life_expectancy_reaches_the_engine():
     from app.seed_users import DEV_PASSWORD
 
     cbe = {"inspection": "Normal", "mass": "Normal", "axillary_nodes": "Normal"}
-    form = {"full_name": "Test Rules Intake", "date_of_birth": "1946-03-01", "national_id": INTAKE_NID,
-            "phone": "03001234567", "evaluation_date": TODAY.isoformat(), "presentation": False,
+    form = {"evaluation_date": TODAY.isoformat(), "presentation": False,
             "marital_status": "Married", "height_cm": 160, "weight_kg": 60,
             "chest_radiation": "No", "genetic_status": "Never tested",
             "geriatric_end_stage_failure": "No", "geriatric_adl_independent": "Yes",
@@ -179,12 +179,17 @@ def test_intake_form_life_expectancy_reaches_the_engine():
             "cbe_right": cbe, "cbe_left": cbe,
             "imaging": [{"date": TODAY.isoformat(), "modality": "Mammogram", "density": "B", "birads": 1}],
             "plan": ["Routine Rescreening (Mammogram/DBT in 12–24 Months)"],
-            "examiner_name": "Dr. Test", "signed_date": TODAY.isoformat()}
+            "signed_date": TODAY.isoformat()}
     remove_intake_patient()
     try:
-        admin = TestClient(app)
+        admin, doctor = TestClient(app), TestClient(app)
         assert admin.post("/api/login", json={"username": "admin1", "password": DEV_PASSWORD}).status_code == 200
-        res = admin.post("/api/intake", json=form)
+        reg = admin.post("/api/registration", json={
+            "full_name": "Test Rules Intake", "date_of_birth": "1946-03-01", "national_id": INTAKE_NID,
+            "phone": "03001234567", "clinician_staff_id": 3})
+        assert reg.status_code == 201, reg.text
+        assert doctor.post("/api/login", json={"username": "clinician1", "password": DEV_PASSWORD}).status_code == 200
+        res = doctor.post("/api/intake", json={**form, "patient_id": reg.json()["patient_id"]})
         assert res.status_code == 201, res.text
         assert res.json()["lane"] == "RoutineScreening"          # was DataPending before the fix
         saved = sql("""SELECT g.life_expectancy_over_10y FROM geriatric_assessment g

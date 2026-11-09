@@ -91,7 +91,7 @@ class IntakeForm(BaseModel):
     full_name: str = Field(min_length=2, max_length=150)
     date_of_birth: date
     patient_id: Optional[str] = Field(None, pattern=r"^BC-([A-Z]{2}-\d{3}|\d{5})$")  # empty = new ID
-    phone: str = Field(min_length=7, max_length=30)
+    phone: Optional[str] = Field(None, min_length=7, max_length=30)   # required at registration
     national_id: Optional[str] = Field(None, max_length=30)
     evaluation_date: date
     idempotency_key: str = Field(default_factory=lambda: str(uuid4()), min_length=8, max_length=100)

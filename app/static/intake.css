@@ -230,3 +230,13 @@ dialog.saved { max-width: 34rem; width: calc(100% - 2rem); }
   .history-card dl { grid-template-columns: 1fr; }
   .history-card dd { margin-bottom: 0.4rem; }
 }
+
+/* ---------- Registration (front desk) and the clinician's patient card ---------- */
+.register-form { max-width: 48rem; padding: 0 0 4rem; }
+.patient-card {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .75rem 1.25rem;
+  margin: 1rem 0 0; padding: .9rem 1rem; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2, var(--surface));
+}
+.patient-card dt { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted, inherit); opacity: .8; }
+.patient-card dd { margin: .15rem 0 0; font-weight: 600; }
+.patient-card[hidden] { display: none; }

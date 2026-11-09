@@ -15,7 +15,8 @@ uvicorn app.main:app --reload
 
 Open:
 - http://localhost:8000          dashboard
-- http://localhost:8000/intake   new patient intake form (proforma)
+- http://localhost:8000/register front desk: register a patient and send them to a clinician (admin1)
+- http://localhost:8000/intake   clinical proforma incl. imaging report and BI-RADS (clinician1)
 - http://localhost:8000/docs     API docs (Swagger)
 - http://localhost:8000/health   health check
 
@@ -49,7 +50,8 @@ app/templates/base.html  shared layout (sidebar per role); _ui.html icons
 app/static/app.css    design system (light + dark); intake.css = form pages only
 app/patient_portal.py data for the patient's own page
 app/schemas.py        form validation (Pydantic)
-app/intake.py         saves the form in one transaction
+app/registration.py   front-desk registration (demographics + assigned clinician)
+app/intake.py         saves the clinician's proforma in one transaction
 app/database.py       DB connection (reads .env)
 app/templates/        HTML (Jinja2)
 app/static/           CSS
@@ -89,7 +91,8 @@ Patients see their status and plan only after a clinician releases a note for th
 | S4 | malignant result | referral assigned | 5 days | Tumor Board | Tumor Board, Navigator, Clinician |
 | S5 | malignant result | treatment started | 21 days | CMO (red flag) | Clinician; closes the loop |
 
-- The rules engine opens a loop for BI-RADS 4/5 results; intake now runs the engine automatically.
+- Intake is split: the Admin registers the patient (demographics only) and assigns a clinician; the patient then waits on that clinician's dashboard. The clinician fills in the proforma, including the imaging report and BI-RADS, and signs it as themselves.
+- Saving the clinical intake runs the rules engine: BI-RADS 4/5 opens the care loop (biopsy pathway) and starts S1.
 - The server checks for breaches every 60 s (`SLA_CHECK_SECONDS`) and on every dashboard load.
 - Each staff member works the loop at `/loop/<patient_id>` (click a patient on the dashboard).
 - SMS and phone calls are recorded in `patient_contact` but not actually sent yet.

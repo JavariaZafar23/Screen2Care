@@ -1,18 +1,23 @@
 # Save the breast screening proforma (intake form v2) in one transaction, then
-# calculate the first-visit risk tier from the saved snapshot.
+# calculate the first-visit risk tier from the saved snapshot. The clinician fills it
+# in (history, examination, imaging report with BI-RADS, plan) for a patient the front
+# desk has already registered (app/registration.py); demographics come from that record.
 import json
 from datetime import datetime, time, timezone
 
 from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from sqlalchemy import text
 
 from app.database import engine
 from app.plan_dates import due_dates, plan_schedule
+from app.registration import find_patient
 from app.risk_engine import calculate_risk, plan_disposition
 from app.schemas import IntakeForm
 
-ADMIN_STAFF_ID = 1          # intake is entered at the front desk
-RADIOLOGIST_STAFF_ID = 2    # reporting radiologist for scans entered at intake
+RADIOLOGIST_STAFF_ID = 2    # reporting radiologist for scans the clinician copies from the report
+DEMOGRAPHIC_FIELDS = {"full_name", "date_of_birth", "phone", "national_id", "examiner_name"}
 
 PROCEDURE_TYPES = {"Biopsy": "Biopsy", "Lumpectomy": "Lumpectomy",
                    "Cyst Aspiration": "CystAspiration", "Implants": "Implants"}
@@ -41,21 +46,6 @@ def _released_at(scan_date):
     return datetime.combine(scan_date, time(12, 0), tzinfo=timezone.utc)
 
 
-def _find_patient(conn, f: IntakeForm) -> tuple[str | None, bool]:
-    """Existing patient by Patient ID, else by national ID. Returns (patient_id, exists)."""
-    by_nid = None
-    if f.national_id:
-        by_nid = conn.execute(text("SELECT patient_id FROM patient WHERE national_id = :n"),
-                              {"n": f.national_id}).scalar()
-    if f.patient_id:
-        exists = conn.execute(text("SELECT 1 FROM patient WHERE patient_id = :p"), {"p": f.patient_id}).first()
-        if by_nid and by_nid != f.patient_id:
-            raise HTTPException(status_code=409,
-                                detail=f"National ID {f.national_id} already belongs to patient {by_nid}.")
-        return f.patient_id, exists is not None
-    return by_nid, by_nid is not None
-
-
 def _previous_result(conn, encounter_id: int) -> dict:
     snap = conn.execute(text("SELECT payload FROM encounter_snapshot WHERE encounter_id = :e"),
                         {"e": encounter_id}).scalar() or {}
@@ -64,7 +54,31 @@ def _previous_result(conn, encounter_id: int) -> dict:
     return {"risk_assessment": dict(risk) if risk else None, "doctor_plan": snap.get("plan_schedule", [])}
 
 
-def save_intake(f: IntakeForm) -> dict:
+def clinical_form(payload: dict, clinician: dict) -> IntakeForm:
+    """Build the full proforma from the clinician's answers plus the registered demographics.
+    The examiner is the logged-in clinician, so no name has to be typed."""
+    sent = DEMOGRAPHIC_FIELDS & payload.keys()
+    if sent:
+        raise HTTPException(status_code=422, detail="Demographics come from registration and cannot be "
+                                                    f"changed here: {', '.join(sorted(sent))}.")
+    pid = str(payload.get("patient_id") or "").strip().upper()
+    if not pid:
+        raise HTTPException(status_code=422, detail="Choose a registered patient first.")
+    with engine.connect() as conn:
+        patient = conn.execute(text("""
+            SELECT patient_id, full_name, date_of_birth, phone, national_id FROM patient WHERE patient_id = :p
+        """), {"p": pid}).mappings().first()
+        examiner = conn.execute(text("SELECT full_name FROM staff WHERE staff_id = :s"),
+                                {"s": clinician.get("staff_id")}).scalar()
+    if patient is None:
+        raise HTTPException(status_code=404, detail="Patient not found. Ask the front desk to register them.")
+    try:
+        return IntakeForm(**{**payload, **patient, "examiner_name": examiner or clinician.get("name") or "Clinician"})
+    except ValidationError as e:
+        raise RequestValidationError(e.errors(include_url=False, include_context=False))
+
+
+def save_intake(f: IntakeForm, entered_by: int | None) -> dict:
     with engine.begin() as conn:
         dup = conn.execute(text("SELECT patient_id, encounter_id FROM encounter WHERE idempotency_key = :k"),
                            {"k": f.idempotency_key}).mappings().first()
@@ -73,7 +87,9 @@ def save_intake(f: IntakeForm) -> dict:
                     "returning_patient": True, "age": f.age, "bmi": f.bmi, "warnings": f.warnings(),
                     **_previous_result(conn, dup["encounter_id"])}
 
-        patient_id, returning = _find_patient(conn, f)
+        patient_id, returning = find_patient(conn, f.patient_id, f.national_id)
+        seen_before = returning and conn.execute(
+            text("SELECT 1 FROM encounter WHERE patient_id = :p LIMIT 1"), {"p": patient_id}).first() is not None
         if returning:
             conn.execute(text("""
                 UPDATE patient SET full_name = :n, date_of_birth = :d, phone = :ph,
@@ -88,7 +104,7 @@ def save_intake(f: IntakeForm) -> dict:
                 INSERT INTO patient (patient_id, full_name, date_of_birth, national_id, phone, created_by)
                 VALUES (:p, :n, :d, :nid, :ph, :by)
             """), {"p": patient_id, "n": f.full_name, "d": f.date_of_birth, "nid": f.national_id,
-                   "ph": f.phone, "by": ADMIN_STAFF_ID})
+                   "ph": f.phone, "by": entered_by})
 
         genetic_status = {"Never tested": "Unknown"}.get(f.genetic_status, f.genetic_status)
         lesion = f.high_risk_biopsy if f.high_risk_biopsy in ("ADH", "ALH", "LCIS") else None
@@ -160,7 +176,7 @@ def save_intake(f: IntakeForm) -> dict:
                     :exam, :signed, :plan, :notes, :mh, :key)
             RETURNING encounter_id
         """), {"p": patient_id, "ed": f.evaluation_date, "et": "Diagnostic" if f.presentation else "Screening",
-               "sym": f.presentation, "cc": _chief_complaint(f), "by": ADMIN_STAFF_ID,
+               "sym": f.presentation, "cc": _chief_complaint(f), "by": entered_by,
                "lump": f.lump_side, "ldur": f.lump_duration, "nds": f.nipple_discharge_side,
                "ndc": f.nipple_discharge_color, "pt": f.pain_type, "ps": f.pain_severity,
                "disp": plan_disposition(f.plan), "fum": f.followup_months, "exam": f.examiner_name,
@@ -221,11 +237,11 @@ def save_intake(f: IntakeForm) -> dict:
         conn.execute(text("""
             INSERT INTO event_log (patient_id, event_type, actor_id, details)
             VALUES (:p, 'IntakeSubmitted', :by, CAST(:d AS JSONB))
-        """), {"p": patient_id, "by": ADMIN_STAFF_ID, "d": json.dumps(
-            {"encounter_id": encounter_id, "returning_patient": returning, "snapshot_id": snapshot_id,
+        """), {"p": patient_id, "by": entered_by, "d": json.dumps(
+            {"encounter_id": encounter_id, "returning_patient": seen_before, "snapshot_id": snapshot_id,
              "risk_tier": risk.tier})})
 
-    return {"patient_id": patient_id, "encounter_id": encounter_id, "returning_patient": returning,
+    return {"patient_id": patient_id, "encounter_id": encounter_id, "returning_patient": seen_before,
             "duplicate": False, "age": f.age, "bmi": f.bmi, "warnings": f.warnings(),
             "risk_assessment": risk.as_dict(), "doctor_plan": schedule}
 

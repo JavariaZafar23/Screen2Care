@@ -1,5 +1,6 @@
-// Breast screening clinical proforma (intake v2): conditional fields, repeat rows,
-// live checks, patient lookup and submit. Field rules follow app/schemas.py.
+// Breast screening clinical proforma (intake v2), filled in by the clinician for a
+// patient registered at the front desk: conditional fields, repeat rows, live checks,
+// patient selection and submit. Field rules follow app/schemas.py.
 const form = document.getElementById("intake");
 const $ = (id) => document.getElementById(id);
 const val = (id) => $(id)?.value.trim() || null;
@@ -197,9 +198,7 @@ function payload() {
   const life = val("geriatric_life");
   const family = rows("family_entries").map((r) => ({ ...r, family_side: "Unknown side" }));
   return {
-    full_name: val("full_name"), date_of_birth: val("date_of_birth"),
-    patient_id: val("patient_id")?.toUpperCase() ?? null, phone: val("phone"),
-    national_id: val("national_id"), evaluation_date: val("evaluation_date"),
+    patient_id: val("patient_pick"), evaluation_date: val("evaluation_date"),
     idempotency_key: idempotencyKey,
     presentation: pres === null ? null : pres === "true",
     lump_side: val("lump_side"), lump_duration: val("lump_duration"),
@@ -224,7 +223,7 @@ function payload() {
     cbe_right: exam("r"), cbe_left: exam("l"),
     imaging: rows("imaging_entries"), imaging_not_done: $("imaging_not_done").checked,
     plan: planChosen(), followup_months: num("followup_months"),
-    clinician_notes: val("clinician_notes"), examiner_name: val("examiner_name"), signed_date: val("signed_date"),
+    clinician_notes: val("clinician_notes"), signed_date: val("signed_date"),
   };
 }
 
@@ -326,11 +325,15 @@ function fillList(id, items, empty) {
 
 function showSaved(body) {
   const risk = body.risk_assessment || {};
-  $("saved_text").textContent = body.duplicate
+  const loop = body.lane === "UrgentWorkup";
+  $("saved_text").textContent = (body.duplicate
     ? `This form was already saved for patient ${body.patient_id}. Nothing new was added.`
     : body.returning_patient
-      ? `New visit added to patient ${body.patient_id}. Age on the evaluation date: ${body.age}.`
-      : `New patient created with ID ${body.patient_id}. Age on the evaluation date: ${body.age}.`;
+      ? `New visit added for patient ${body.patient_id}. Age on the evaluation date: ${body.age}.`
+      : `First clinical intake saved for patient ${body.patient_id}. Age on the evaluation date: ${body.age}.`)
+    + (loop ? " BI-RADS 4/5: the care loop is open and the patient goes to the biopsy pathway." : "");
+  $("open_loop").hidden = !loop;
+  $("open_loop").href = `/loop/${encodeURIComponent(body.patient_id)}`;
   $("risk_label").textContent = risk.label || risk.tier || "Not calculated";
   $("risk_label").className = `risk-pill risk-${String(risk.tier || "incomplete").toLowerCase()}`;
   $("risk_alert").textContent = risk.alert_trigger || "";
@@ -367,6 +370,8 @@ function resetForm() {
   $("previous_intakes").hidden = true;
   $("evaluation_date").value = todayIso();
   $("signed_date").value = todayIso();
+  $("patient_card").hidden = true;
+  $("date_of_birth").value = "";
   idempotencyKey = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random();
   showErrors([]);
   refresh();
@@ -409,26 +414,44 @@ function renderHistory(history) {
   $("previous_intakes").hidden = !history.length;
 }
 
+async function loadPatient(id) {
+  const res = await fetch(`/api/intake/patients/${encodeURIComponent(id.toUpperCase())}`);
+  if (!res.ok) return res.status;
+  const data = await res.json();
+  resetForm();
+  const pt = data.patient;
+  const pick = $("patient_pick");
+  if (![...pick.options].some((o) => o.value === pt.patient_id)) pick.add(new Option(`${pt.full_name} · ${pt.patient_id}`, pt.patient_id));
+  pick.value = pt.patient_id;
+  $("date_of_birth").value = pt.date_of_birth;
+  $("pc_name").textContent = pt.full_name;
+  $("pc_id").textContent = pt.patient_id;
+  $("pc_dob").textContent = pt.date_of_birth;
+  $("pc_phone").textContent = pt.phone || "Not recorded";
+  $("patient_card").hidden = false;
+  renderHistory(data.intake_history || []);
+  refresh();
+  return 200;
+}
+
 async function findPatient() {
   const id = val("lookup_patient_id");
   const msg = $("lookup_message");
   msg.hidden = true;
   if (!id) { msg.textContent = "Enter a Patient ID."; msg.hidden = false; return; }
-  const res = await fetch(`/api/intake/patients/${encodeURIComponent(id.toUpperCase())}`);
-  if (!res.ok) { msg.textContent = res.status === 404 ? "No patient with that ID." : "The record could not be loaded."; msg.hidden = false; return; }
-  const data = await res.json();
-  resetForm();
-  const pt = data.patient;
-  $("patient_id").value = pt.patient_id;
-  $("full_name").value = pt.full_name;
-  $("date_of_birth").value = pt.date_of_birth;
-  $("phone").value = pt.phone || "";
-  $("national_id").value = pt.national_id || "";
-  renderHistory(data.intake_history || []);
+  const status = await loadPatient(id);
+  if (status !== 200) {
+    msg.textContent = status === 404 ? "No patient with that ID." : status === 403 ? "This patient is not on your list. Ask the front desk to assign them to you." : "The record could not be loaded.";
+    msg.hidden = false; return;
+  }
   lookup.close();
-  refresh();
-  $("full_name").focus();
 }
+
+$("patient_pick").addEventListener("change", async (e) => {
+  const id = e.target.value;
+  if (!id) { resetForm(); return; }
+  if (await loadPatient(id) !== 200) showErrors(["The patient record could not be loaded."]);
+});
 
 // ---------- Section highlight in the side menu ----------
 const tocLinks = [...document.querySelectorAll(".toc a")];
@@ -441,4 +464,5 @@ document.querySelectorAll(".block").forEach((s) => observer.observe(s));
 $("evaluation_date").value = todayIso();
 $("signed_date").value = todayIso();
 refresh();
-if (new URLSearchParams(location.search).get("lookup") === "1") $("open_lookup").click();
+const wanted = new URLSearchParams(location.search).get("patient");
+if (wanted) loadPatient(wanted).then((st) => { if (st !== 200) showErrors(["That patient could not be loaded. Choose one from the list."]); });
