@@ -33,24 +33,37 @@ ONCOLOGY_TEAM_ROLE = "TumorBoard"
 # Which roles may do each step (enforced in the API and used to show the right buttons)
 STEP_ROLES = {
     "contact": ("Navigator", "Clinician"),
-    "book_biopsy": ("Navigator", "SchedulingManager"),
+    "book_biopsy": ("Navigator", "SchedulingManager"),  # date and time of the biopsy appointment
     "biopsy_performed": ("Radiologist",),
     "pathology": ("Pathologist",),
-    "assign_referral": ("TumorBoard", "Navigator", "Clinician"),
+    "assign_referral": ("Navigator",),             # navigator refers a malignant result to an oncologist
     "treatment": ("Clinician",),
     "book_results": ("Clinician", "Navigator"),     # appointment to go through the biopsy result
     "disclose_result": ("Clinician",),              # only a doctor tells the patient the result
+    "close_loop": ("CMO", "Navigator", "Clinician"),  # which reasons each may use: CLOSE_REASONS
+    "reopen_loop": ("CMO", "Clinician"),
 }
+
+# Closing a loop without treatment. The loop is never deleted: clocks stop, alerts are
+# resolved and the record stays, so the CMO can review it and the loop can be reopened.
+CLOSE_REASONS = {
+    "LostToFollowUp": ("CMO", "Navigator"),
+    "Transferred": ("CMO", "Navigator"),
+    "Deceased": ("CMO", "Navigator"),
+    "Declined": ("Clinician",),               # a doctor explains the risk before a refusal is accepted
+}
+CLOSE_LABELS = {"LostToFollowUp": "Lost to follow-up", "Transferred": "Transferred to another hospital",
+                "Deceased": "Deceased", "Declined": "Patient declined the biopsy / treatment"}
+REOPENABLE = ("Closed-LostToFollowUp", "Closed-Declined", "Closed-Transferred")
 
 
 class ContactIn(BaseModel):
-    channel: Literal["SMS", "Phone", "Email", "InPerson"]
+    channel: Literal["SMS", "Phone", "Email", "InPerson", "Letter"]
     outcome: Literal["Reached", "NoAnswer", "WrongNumber", "Declined"]
 
 
 class BiopsyIn(BaseModel):
-    biopsy_type: Literal["US-Core", "Stereotactic", "MRI-Guided", "Surgical"]
-    laterality: Optional[Literal["L", "R"]] = None
+    """Booking the biopsy appointment: only the date and time."""
     scheduled_for: datetime
 
 
@@ -59,8 +72,14 @@ class PathologyIn(BaseModel):
     histology: Optional[str] = Field(None, max_length=100)
 
 
+REFERRAL_SPECIALTIES = {"SurgicalOncology": "Surgical oncology", "MedicalOncology": "Medical oncology",
+                        "RadiationOncology": "Radiation oncology"}
+
+
 class AssignIn(BaseModel):
     assignee_staff_id: int
+    specialty: Literal["SurgicalOncology", "MedicalOncology", "RadiationOncology"] = "SurgicalOncology"
+    note: Optional[str] = Field(None, max_length=400)
 
 
 class TreatmentIn(BaseModel):
@@ -74,6 +93,15 @@ class ResultsAppointmentIn(BaseModel):
 
 class DiscloseIn(BaseModel):
     channel: Literal["InPerson", "Phone"] = "InPerson"
+
+
+class CloseLoopIn(BaseModel):
+    reason: Literal["LostToFollowUp", "Transferred", "Deceased", "Declined"]
+    note: str = Field(min_length=10, max_length=400)
+
+
+class ReopenLoopIn(BaseModel):
+    note: str = Field(min_length=10, max_length=400)
 
 
 # ---------- helpers ---------------------------------------------------------------
@@ -142,6 +170,11 @@ def open_episode(conn, pid) -> Optional[int]:
     """), {"p": pid}).mappings().first()
     if img is None:
         return None
+    # A loop already ran for this result (closed with a reason or finished): do not reopen it
+    # silently. Reopening is a deliberate step (reopen_loop).
+    if conn.execute(text("SELECT 1 FROM care_episode WHERE trigger_imaging_id = :i"),
+                    {"i": img["imaging_id"]}).first():
+        return None
     eid = conn.execute(text("""
         INSERT INTO care_episode (patient_id, trigger_imaging_id, opened_at)
         VALUES (:p, :i, :t) RETURNING episode_id
@@ -208,17 +241,17 @@ def record_contact(pid: str, data: ContactIn, staff_id: int) -> dict:
 
 
 def book_biopsy(pid: str, data: BiopsyIn, staff_id: int) -> dict:
+    """The navigator or scheduling manager books the biopsy appointment (date and time)."""
     with engine.begin() as conn:
         eid = _open_episode_id(conn, pid)
-        active = conn.execute(text(
-            "SELECT 1 FROM biopsy WHERE episode_id = :e AND status IN ('Ordered','Booked')"), {"e": eid}).first()
-        if active:
+        if conn.execute(text("SELECT 1 FROM biopsy WHERE episode_id = :e AND status IN ('Ordered','Booked')"),
+                        {"e": eid}).first():
             raise HTTPException(status_code=409, detail="A biopsy is already booked for this patient")
         _acknowledge(conn, pid, eid, staff_id)   # booking means the patient has been reached
         bid = conn.execute(text("""
-            INSERT INTO biopsy (episode_id, biopsy_type, laterality, ordered_at, booked_at, scheduled_for, status)
-            VALUES (:e, :t, :l, now(), now(), :when, 'Booked') RETURNING biopsy_id
-        """), {"e": eid, "t": data.biopsy_type, "l": data.laterality, "when": data.scheduled_for}).scalar()
+            INSERT INTO biopsy (episode_id, ordered_at, booked_at, booked_by, scheduled_for, status)
+            VALUES (:e, now(), now(), :s, :when, 'Booked') RETURNING biopsy_id
+        """), {"e": eid, "s": staff_id, "when": data.scheduled_for}).scalar()
         _complete_task(conn, eid, 2)
         _log(conn, pid, "BiopsyBooked", staff_id, eid, biopsy_id=bid, scheduled_for=data.scheduled_for)
     return {"biopsy_id": bid}
@@ -275,16 +308,18 @@ def assign_referral(pid: str, data: AssignIn, staff_id: int) -> dict:
     with engine.begin() as conn:
         eid = _open_episode_id(conn, pid)
         ok = conn.execute(text(
-            "SELECT 1 FROM staff WHERE staff_id = :s AND is_active AND role IN ('Clinician','TumorBoard')"),
+            "SELECT 1 FROM staff WHERE staff_id = :s AND is_active AND role = 'TumorBoard'"),
             {"s": data.assignee_staff_id}).first()
         if not ok:
-            raise HTTPException(status_code=422, detail="Choose an active clinician or the Tumor Board")
+            raise HTTPException(status_code=422, detail="Choose an oncologist from the oncology team")
         rid = conn.execute(text("""
-            UPDATE referral SET assigned_to_id = :a, assigned_at = now(), status = 'Assigned'
+            UPDATE referral SET assigned_to_id = :a, assigned_at = now(), status = 'Assigned',
+                   specialty = :sp, referred_by = :by, referral_note = :n
             WHERE referral_id = (SELECT referral_id FROM referral WHERE episode_id = :e AND status = 'Pending'
                                  ORDER BY created_at LIMIT 1)
             RETURNING referral_id
-        """), {"a": data.assignee_staff_id, "e": eid}).scalar()
+        """), {"a": data.assignee_staff_id, "e": eid, "sp": data.specialty, "by": staff_id,
+               "n": data.note}).scalar()
         if rid is None:
             raise HTTPException(status_code=409, detail="No pending referral to assign")
         _complete_task(conn, eid, 4)
@@ -334,7 +369,7 @@ def start_treatment(pid: str, data: TreatmentIn, staff_id: int) -> dict:
 def _undisclosed_pathology(conn, pid):
     """The latest biopsy report for this patient that nobody has gone through with them yet."""
     row = conn.execute(text("""
-        SELECT r.pathology_id, b.episode_id FROM pathology_result r
+        SELECT r.pathology_id, r.diagnosis, b.episode_id FROM pathology_result r
         JOIN biopsy b ON b.biopsy_id = r.biopsy_id
         JOIN care_episode e ON e.episode_id = b.episode_id
         WHERE e.patient_id = :p AND r.disclosed_at IS NULL
@@ -345,10 +380,13 @@ def _undisclosed_pathology(conn, pid):
     return row
 
 
-def book_results_appointment(pid: str, data: ResultsAppointmentIn, staff_id: int) -> dict:
-    """Book (or move) the appointment where a doctor goes through the biopsy result."""
+def book_results_appointment(pid: str, data: ResultsAppointmentIn, staff_id: int, role: str = "Clinician") -> dict:
+    """Book (or move) the appointment where a doctor goes through the biopsy result.
+    A benign (or other non-cancer) result is handled on the clinical side only."""
     with engine.begin() as conn:
         path = _undisclosed_pathology(conn, pid)
+        if role != "Clinician" and path["diagnosis"] != "Malignant":
+            raise HTTPException(status_code=403, detail="Non-cancer biopsy results are handled by the clinician")
         doctor = conn.execute(text(
             "SELECT full_name FROM staff WHERE staff_id = :s AND is_active AND role = 'Clinician'"),
             {"s": data.clinician_staff_id}).scalar()
@@ -382,23 +420,190 @@ def disclose_result(pid: str, data: DiscloseIn, staff_id: int) -> dict:
         """), {"r": path["pathology_id"]})
         _log(conn, pid, "ResultDisclosedToPatient", staff_id, path["episode_id"],
              pathology_id=path["pathology_id"], channel=data.channel)
-    return {"disclosed": True}
+        benign = conn.execute(text("SELECT diagnosis FROM pathology_result WHERE pathology_id = :r"),
+                              {"r": path["pathology_id"]}).scalar() == "Benign"
+        if benign:
+            _close_benign(conn, pid, path["episode_id"], staff_id)
+    return {"disclosed": True, "loop_closed": benign}
 
 
-def results_to_discuss(scope_sql: str, params: dict) -> list[dict]:
-    """Biopsy reports not yet gone through with the patient, for the patients this user may see."""
+def _close_benign(conn, pid, eid, staff_id):
+    """Benign biopsy, result gone through with the patient: the care loop ends and the patient
+    goes back to imaging follow-up (a check scan in 6 months)."""
+    tasks = conn.execute(text("""
+        UPDATE sla_task SET status = 'Cancelled' WHERE episode_id = :e AND completed_at IS NULL
+          AND status <> 'Cancelled' RETURNING sla_task_id
+    """), {"e": eid}).scalars().all()
+    if tasks:
+        conn.execute(text("UPDATE sla_alert SET resolved_at = now() WHERE sla_task_id = ANY(:t) AND resolved_at IS NULL"),
+                     {"t": list(tasks)})
+    _resolve_notifications(conn, eid)
+    conn.execute(text("""
+        UPDATE care_episode SET status = 'Closed-Benign', closed_at = now(), closed_by = :s,
+               closure_note = 'Benign biopsy; result discussed with the patient. Follow-up imaging in 6 months.'
+        WHERE episode_id = :e
+    """), {"e": eid, "s": staff_id})
+    _log(conn, pid, "EpisodeClosed", staff_id, eid, reason="Benign")
+    from app import followup           # local import: followup imports this module
+    followup.schedule_after_benign(conn, pid, eid)
+
+
+def referrals_to_make(scope_sql: str, params: dict) -> list[dict]:
+    """Malignant biopsy results whose oncology referral the navigator still has to make (S4)."""
     with engine.connect() as conn:
         return [dict(r) for r in conn.execute(text(f"""
-            SELECT p.patient_id, p.full_name, r.reported_at, a.scheduled_for, s.full_name AS doctor
+            SELECT p.patient_id, p.full_name, r.created_at, pr.histology, pr.reported_at,
+                   FLOOR(EXTRACT(EPOCH FROM (t.due_at - now())) / 3600)::INT AS hours_left
+            FROM referral r
+            JOIN care_episode e ON e.episode_id = r.episode_id AND e.status IN ('Open','Paused')
+            JOIN patient p ON p.patient_id = r.patient_id
+            LEFT JOIN sla_task t ON t.episode_id = e.episode_id AND t.section = 4
+            LEFT JOIN LATERAL (SELECT x.histology, x.reported_at FROM pathology_result x
+                               JOIN biopsy b ON b.biopsy_id = x.biopsy_id
+                               WHERE b.episode_id = e.episode_id AND x.diagnosis = 'Malignant'
+                               ORDER BY x.reported_at DESC LIMIT 1) pr ON TRUE
+            WHERE r.status = 'Pending' AND {scope_sql}
+            ORDER BY t.due_at
+        """), params).mappings()]
+
+
+def results_to_discuss(scope_sql: str, params: dict, role: str = "Clinician") -> list[dict]:
+    """Biopsy reports not yet gone through with the patient, for the patients this user may see.
+    The navigator only sees malignant ones; benign results stay on the clinical side."""
+    only = "" if role == "Clinician" else "AND r.diagnosis = 'Malignant'"
+    with engine.connect() as conn:
+        return [dict(r) for r in conn.execute(text(f"""
+            SELECT p.patient_id, p.full_name, r.reported_at, r.diagnosis, a.scheduled_for, s.full_name AS doctor
             FROM pathology_result r
             JOIN biopsy b ON b.biopsy_id = r.biopsy_id
             JOIN care_episode e ON e.episode_id = b.episode_id
             JOIN patient p ON p.patient_id = e.patient_id
             LEFT JOIN results_appointment a ON a.pathology_id = r.pathology_id AND a.status = 'Booked'
             LEFT JOIN staff s ON s.staff_id = a.clinician_id
-            WHERE r.disclosed_at IS NULL AND {scope_sql}
+            WHERE r.disclosed_at IS NULL AND e.status IN ('Open','Paused') {only} AND {scope_sql}
             ORDER BY a.scheduled_for IS NOT NULL, r.reported_at
         """), params).mappings()]
+
+
+# ---------- closing without treatment, and reopening -----------------------------
+
+def failed_contacts(conn, eid) -> int:
+    """Staff-recorded attempts that did not reach the patient."""
+    return conn.execute(text("""
+        SELECT COUNT(*) FROM patient_contact
+        WHERE episode_id = :e AND performed_by IS NOT NULL AND outcome IN ('NoAnswer', 'WrongNumber')
+    """), {"e": eid}).scalar()
+
+
+def close_loop(pid: str, data: CloseLoopIn, user: dict) -> dict:
+    if user["role"] not in CLOSE_REASONS[data.reason]:
+        raise HTTPException(status_code=403, detail=f"{CLOSE_LABELS[data.reason]} can only be recorded by: "
+                                                    + ", ".join(CLOSE_REASONS[data.reason]))
+    staff_id = user.get("staff_id")
+    with engine.begin() as conn:
+        eid = _open_episode_id(conn, pid)
+        conn.execute(text("""
+            UPDATE care_episode SET status = :st, closed_at = now(), closed_by = :s, closure_note = :n
+            WHERE episode_id = :e
+        """), {"st": f"Closed-{data.reason}", "s": staff_id, "n": data.note.strip(), "e": eid})
+        tasks = conn.execute(text("""
+            UPDATE sla_task SET status = 'Cancelled'
+            WHERE episode_id = :e AND completed_at IS NULL AND status <> 'Cancelled' RETURNING sla_task_id
+        """), {"e": eid}).scalars().all()
+        if tasks:
+            conn.execute(text("UPDATE sla_alert SET resolved_at = now() WHERE sla_task_id = ANY(:t) AND resolved_at IS NULL"),
+                         {"t": list(tasks)})
+        conn.execute(text("""
+            UPDATE biopsy SET status = CASE WHEN :r = 'Declined' THEN 'Declined' ELSE 'Cancelled' END
+            WHERE episode_id = :e AND status IN ('Ordered', 'Booked')
+        """), {"e": eid, "r": data.reason})
+        conn.execute(text("""
+            UPDATE results_appointment SET status = 'Cancelled' WHERE status = 'Booked' AND pathology_id IN
+              (SELECT r.pathology_id FROM pathology_result r JOIN biopsy b ON b.biopsy_id = r.biopsy_id
+               WHERE b.episode_id = :e)
+        """), {"e": eid})
+        conn.execute(text("UPDATE referral SET status = 'Cancelled' WHERE episode_id = :e AND status IN ('Pending', 'Assigned')"),
+                     {"e": eid})
+        _resolve_notifications(conn, eid)
+        _log(conn, pid, "EpisodeClosed", staff_id, eid, reason=data.reason, note=data.note.strip(),
+             clocks_stopped=len(tasks))
+    return {"closed": True, "status": f"Closed-{data.reason}", "after": f"/?closed={pid}&kind=care"}
+
+
+def reopen_loop(pid: str, data: ReopenLoopIn, staff_id: int) -> dict:
+    """The patient came back (or was found): start a new loop from the same result, S1 from now."""
+    with engine.begin() as conn:
+        if conn.execute(text("SELECT 1 FROM care_episode WHERE patient_id = :p AND status IN ('Open','Paused')"),
+                        {"p": pid}).first():
+            raise HTTPException(status_code=409, detail="This patient already has an open care loop")
+        last = conn.execute(text("""
+            SELECT episode_id, trigger_imaging_id, status FROM care_episode WHERE patient_id = :p
+            ORDER BY opened_at DESC, episode_id DESC LIMIT 1
+        """), {"p": pid}).mappings().first()
+        if last is None or last["status"] not in REOPENABLE:
+            raise HTTPException(status_code=409, detail="Only a loop closed as lost to follow-up, declined "
+                                                        "or transferred can be reopened")
+        eid = conn.execute(text("""
+            INSERT INTO care_episode (patient_id, trigger_imaging_id, opened_at, reopened_from)
+            VALUES (:p, :i, now(), :f) RETURNING episode_id
+        """), {"p": pid, "i": last["trigger_imaging_id"], "f": last["episode_id"]}).scalar()
+        _start_task(conn, eid, 1)
+        conn.execute(text("INSERT INTO patient_contact (episode_id, channel, attempted_at) VALUES (:e, 'SMS', now())"),
+                     {"e": eid})
+        img = conn.execute(text("SELECT birads_category, modality FROM imaging_result WHERE imaging_id = :i"),
+                           {"i": last["trigger_imaging_id"]}).mappings().one()
+        _log(conn, pid, "EpisodeReopened", staff_id, eid, previous_episode=last["episode_id"],
+             previous_status=last["status"], note=data.note.strip())
+        _notify_oncology_team(conn, pid, eid, img["birads_category"], img["modality"])
+    return {"reopened": True, "episode_id": eid}
+
+
+def closed_without_treatment(limit: int = 50) -> list[dict]:
+    """For the CMO: every care loop and imaging follow-up closed with a reason, newest first.
+    The patient is off the working lists; the record stays here so the loop can be restarted."""
+    with engine.connect() as conn:
+        return [dict(r) for r in conn.execute(text("""
+            SELECT * FROM (
+                SELECT 'care' AS kind, e.patient_id, p.full_name, e.status, e.closed_at, e.closure_note,
+                       s.full_name AS closed_by_name, s.role AS closed_by_role,
+                       'BI-RADS ' || i.birads_category || ' care loop' AS what,
+                       (SELECT COUNT(*) FROM patient_contact c WHERE c.episode_id = e.episode_id
+                          AND c.performed_by IS NOT NULL AND c.outcome IN ('NoAnswer','WrongNumber')) AS failed_contacts,
+                       EXISTS (SELECT 1 FROM care_episode n WHERE n.reopened_from = e.episode_id) AS reopened
+                FROM care_episode e
+                JOIN patient p ON p.patient_id = e.patient_id
+                JOIN imaging_result i ON i.imaging_id = e.trigger_imaging_id
+                LEFT JOIN staff s ON s.staff_id = e.closed_by
+                WHERE e.status IN ('Closed-LostToFollowUp','Closed-Declined','Closed-Transferred','Closed-Deceased')
+                UNION ALL
+                SELECT 'followup', f.patient_id, p.full_name, f.status, f.closed_at, f.closure_note,
+                       s.full_name, s.role, 'Imaging follow-up (' || f.lane || ')',
+                       (SELECT COUNT(*) FROM followup_contact c WHERE c.loop_id = f.loop_id
+                          AND c.performed_by IS NOT NULL AND c.outcome IN ('NoAnswer','WrongNumber')),
+                       EXISTS (SELECT 1 FROM followup_loop n WHERE n.reopened_from = f.loop_id)
+                FROM followup_loop f
+                JOIN patient p ON p.patient_id = f.patient_id
+                LEFT JOIN staff s ON s.staff_id = f.closed_by
+                WHERE f.status IN ('Closed-LostToFollowUp','Closed-Declined','Closed-Transferred','Closed-Deceased')
+            ) x ORDER BY closed_at DESC LIMIT :n
+        """), {"n": limit}).mappings()]
+
+
+def closure_notice(pid: str, kind: str) -> Optional[dict]:
+    """Shown once after a loop is closed: who the patient is and that they left the loop."""
+    table = "care_episode" if kind == "care" else "followup_loop"
+    with engine.connect() as conn:
+        row = conn.execute(text(f"""
+            SELECT p.patient_id, p.full_name, l.status, l.closed_at FROM {table} l
+            JOIN patient p ON p.patient_id = l.patient_id
+            WHERE l.patient_id = :p ORDER BY l.closed_at DESC NULLS LAST LIMIT 1
+        """), {"p": pid}).mappings().first()
+    if row is None or row["status"] not in ("Closed-LostToFollowUp", "Closed-Declined",
+                                            "Closed-Transferred", "Closed-Deceased"):
+        return None
+    reason = row["status"].replace("Closed-", "")
+    return {**row, "kind": kind, "reason": CLOSE_LABELS.get(reason, reason),
+            "loop_name": "care loop" if kind == "care" else "imaging follow-up"}
 
 
 # ---------- breach checker --------------------------------------------------------
@@ -426,7 +631,8 @@ def check_sla() -> int:
                 _log(conn, b["patient_id"], "BackupCallStarted", episode_id=b["episode_id"])
             if b["section"] == 4:
                 _log(conn, b["patient_id"], "ReferralRoutedToTumorBoard", episode_id=b["episode_id"])
-    return len(breached)
+    from app.followup import check_followups      # the imaging follow-up loop has its own clocks
+    return len(breached) + check_followups()
 
 
 # ---------- read side -------------------------------------------------------------
@@ -506,10 +712,16 @@ def get_loop(pid: str) -> dict:
         """), {"p": pid}).mappings().first()
         ctx = {"patient": patient, "episode": episode, "sections": [], "contacts": [], "biopsy": None,
                "pathology": None, "referral": None, "treatment": None, "assignees": [],
-               "results_appt": None, "clinicians": []}
+               "results_appt": None, "clinicians": [], "failed_contacts": 0, "closed_by_name": None,
+               "close_labels": CLOSE_LABELS, "close_reasons": CLOSE_REASONS,
+               "reopenable": REOPENABLE, "specialties": REFERRAL_SPECIALTIES}
         if episode is None:
             return ctx
         e = {"e": episode["episode_id"]}
+        ctx["failed_contacts"] = failed_contacts(conn, episode["episode_id"])
+        if episode["closed_by"]:
+            ctx["closed_by_name"] = conn.execute(text("SELECT full_name FROM staff WHERE staff_id = :s"),
+                                                 {"s": episode["closed_by"]}).scalar()
         tasks = {t["section"]: t for t in conn.execute(text("""
             SELECT t.*, EXTRACT(EPOCH FROM (t.due_at - now())) / 3600 AS hours_left
             FROM sla_task t WHERE t.episode_id = :e
@@ -522,12 +734,15 @@ def get_loop(pid: str) -> dict:
             SELECT c.*, s.full_name AS by_name FROM patient_contact c LEFT JOIN staff s ON s.staff_id = c.performed_by
             WHERE c.episode_id = :e ORDER BY c.attempted_at DESC
         """), e).mappings().all()
-        ctx["biopsy"] = conn.execute(text(
-            "SELECT * FROM biopsy WHERE episode_id = :e ORDER BY ordered_at DESC LIMIT 1"), e).mappings().first()
+        ctx["biopsy"] = conn.execute(text("""
+            SELECT b.*, k.full_name AS booked_by_name FROM biopsy b LEFT JOIN staff k ON k.staff_id = b.booked_by
+            WHERE b.episode_id = :e ORDER BY b.ordered_at DESC, b.biopsy_id DESC LIMIT 1
+        """), e).mappings().first()
         ctx["pathology"] = conn.execute(text("""
-            SELECT r.*, s.full_name AS disclosed_by_name FROM pathology_result r
+            SELECT r.*, s.full_name AS disclosed_by_name, ps.full_name AS pathologist_name FROM pathology_result r
             JOIN biopsy b ON b.biopsy_id = r.biopsy_id
             LEFT JOIN staff s ON s.staff_id = r.disclosed_by
+            LEFT JOIN staff ps ON ps.staff_id = r.pathologist_id
             WHERE b.episode_id = :e ORDER BY r.reported_at DESC LIMIT 1
         """), e).mappings().first()
         if ctx["pathology"]:
@@ -545,14 +760,15 @@ def get_loop(pid: str) -> dict:
             ORDER BY on_team DESC, s.full_name
         """), {"p": pid}).mappings().all()
         ctx["referral"] = conn.execute(text("""
-            SELECT r.*, s.full_name AS assignee FROM referral r LEFT JOIN staff s ON s.staff_id = r.assigned_to_id
+            SELECT r.*, s.full_name AS assignee, rb.full_name AS referred_by_name FROM referral r
+            LEFT JOIN staff s ON s.staff_id = r.assigned_to_id LEFT JOIN staff rb ON rb.staff_id = r.referred_by
             WHERE r.episode_id = :e ORDER BY r.created_at DESC LIMIT 1
         """), e).mappings().first()
         ctx["treatment"] = conn.execute(text(
             "SELECT * FROM treatment WHERE episode_id = :e ORDER BY started_at DESC LIMIT 1"), e).mappings().first()
         ctx["assignees"] = conn.execute(text("""
             SELECT staff_id, full_name, role FROM staff
-            WHERE is_active AND role IN ('Clinician','TumorBoard') ORDER BY role, full_name
+            WHERE is_active AND role = 'TumorBoard' ORDER BY full_name
         """)).mappings().all()
     return ctx
 

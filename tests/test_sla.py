@@ -60,6 +60,11 @@ def cleanup():
         "DELETE FROM event_log WHERE patient_id = :p",
         "DELETE FROM lane_assignment WHERE patient_id = :p",
         "DELETE FROM care_episode WHERE patient_id = :p",
+        "DELETE FROM followup_alert WHERE patient_id = :p",
+        "DELETE FROM followup_task WHERE loop_id IN (SELECT loop_id FROM followup_loop WHERE patient_id = :p)",
+        "DELETE FROM followup_contact WHERE loop_id IN (SELECT loop_id FROM followup_loop WHERE patient_id = :p)",
+        "DELETE FROM followup_appointment WHERE loop_id IN (SELECT loop_id FROM followup_loop WHERE patient_id = :p)",
+        "DELETE FROM followup_loop WHERE patient_id = :p",
         "DELETE FROM imaging_result WHERE patient_id = :p",
         "DELETE FROM encounter WHERE patient_id = :p",
         "DELETE FROM care_team_assignment WHERE patient_id = :p",
@@ -116,10 +121,9 @@ def test_full_loop_with_every_escalation(birads5_patient):
     scheduling = logged_in("scheduling1")
     assert any(a["section"] == 2 for a in scheduling.get("/api/alerts").json())
     assert logged_in("radiology1").post(f"/api/patients/{pid}/biopsy",
-                                        json={"biopsy_type": "US-Core", "scheduled_for": "2030-01-01T09:00"}).status_code == 403
+                                        json={"scheduled_for": "2030-01-01T09:00"}).status_code == 403
     assert scheduling.post(f"/api/patients/{pid}/biopsy",
-                           json={"biopsy_type": "US-Core", "laterality": "L",
-                                 "scheduled_for": "2030-01-01T09:00"}).status_code == 200
+                           json={"scheduled_for": "2030-01-01T09:00"}).status_code == 200
     assert task(2)["completed_at"] is not None
 
     # Radiologist performs it -> S3 starts; S3 breach -> Lab Director
@@ -145,7 +149,10 @@ def test_full_loop_with_every_escalation(birads5_patient):
     cmo_alerts = logged_in("cmo1").get("/api/alerts").json()
     assert {a["section"] for a in cmo_alerts if a["patient_id"] == pid} == {4, 5}
 
-    assert tumorboard.post(f"/api/patients/{pid}/referral/assign", json={"assignee_staff_id": 8}).status_code == 200
+    # The navigator makes the referral; the oncology team receives it
+    assert tumorboard.post(f"/api/patients/{pid}/referral/assign", json={"assignee_staff_id": 8}).status_code == 403
+    assert logged_in("navigator1").post(f"/api/patients/{pid}/referral/assign",
+                                        json={"assignee_staff_id": 8}).status_code == 200
     assert alert_roles() == {5: "CMO"}
 
     # Treatment cannot be recorded before the patient has been told the result
@@ -181,7 +188,7 @@ def test_benign_result_starts_no_oncology_clocks(birads5_patient):
     pid = birads5_patient
     logged_in("clinician1").post(f"/api/patients/{pid}/run-engine")
     logged_in("navigator1").post(f"/api/patients/{pid}/biopsy",
-                                 json={"biopsy_type": "US-Core", "scheduled_for": "2030-01-01T09:00"})
+                                 json={"scheduled_for": "2030-01-01T09:00"})
     logged_in("radiology1").post(f"/api/patients/{pid}/biopsy/performed")
     logged_in("pathology1").post(f"/api/patients/{pid}/pathology", json={"diagnosis": "Benign"})
     assert task(3)["status"] == "Met"
@@ -244,7 +251,7 @@ def test_benign_result_stands_the_oncology_team_down(birads5_patient):
     pid = birads5_patient
     logged_in("clinician1").post(f"/api/patients/{pid}/run-engine")
     logged_in("navigator1").post(f"/api/patients/{pid}/biopsy",
-                                 json={"biopsy_type": "US-Core", "scheduled_for": "2030-01-01T09:00"})
+                                 json={"scheduled_for": "2030-01-01T09:00"})
     logged_in("radiology1").post(f"/api/patients/{pid}/biopsy/performed")
     logged_in("pathology1").post(f"/api/patients/{pid}/pathology", json={"diagnosis": "Benign"})
 
@@ -257,7 +264,7 @@ def test_malignant_keeps_the_notification_until_treatment(birads5_patient):
     pid = birads5_patient
     logged_in("clinician1").post(f"/api/patients/{pid}/run-engine")
     logged_in("navigator1").post(f"/api/patients/{pid}/biopsy",
-                                 json={"biopsy_type": "US-Core", "scheduled_for": "2030-01-01T09:00"})
+                                 json={"scheduled_for": "2030-01-01T09:00"})
     logged_in("radiology1").post(f"/api/patients/{pid}/biopsy/performed")
     logged_in("pathology1").post(f"/api/patients/{pid}/pathology", json={"diagnosis": "Malignant"})
     assert notification()["resolved_at"] is None

@@ -20,7 +20,7 @@ from app.auth import (
 )
 from app.database import engine
 from app.intake import clinical_form, lookup_patient, save_intake
-from app import registration
+from app import followup, registration
 from app.patient_portal import get_portal
 from app.plan import (
     DISPOSITION_LABELS, PlanIn, ReleaseNoteIn, get_plan_page, note_source_text, release_patient_note, save_plan,
@@ -136,16 +136,25 @@ def logout():
 def dashboard(request: Request, user: dict = Depends(get_current_user)):
     if user["role"] == "Patient":
         return page(request, "patient.html", user, **get_portal(user["patient_id"]),
-                    ack_needed=care_loop.s1_pending(user["patient_id"]))
+                    ack_needed=care_loop.s1_pending(user["patient_id"]),
+                    followup=followup.patient_view(user["patient_id"]))
     care_loop.check_sla()
     return page(request, "dashboard.html", user,
                 patients=fetch_patients(user), alerts=care_loop.open_alerts(user["role"]),
                 notifications=care_loop.open_notifications(user["role"]),
-                results_due=care_loop.results_to_discuss(*scope_filter(user))
+                results_due=care_loop.results_to_discuss(*scope_filter(user), role=user["role"])
                 if user["role"] in care_loop.STEP_ROLES["book_results"] else [],
+                referrals_due=care_loop.referrals_to_make(*scope_filter(user))
+                if user["role"] in care_loop.STEP_ROLES["assign_referral"] else [],
                 list_title=LIST_TITLES.get(user["role"], "Patients"),
                 waiting_intake=registration.waiting_for_intake(user.get("staff_id"))
                 if user["role"] == "Clinician" else [],
+                closed_loops=care_loop.closed_without_treatment() if user["role"] == "CMO" else [],
+                closed_notice=care_loop.closure_notice(request.query_params["closed"],
+                                                       request.query_params.get("kind", "care"))
+                if request.query_params.get("closed") else None,
+                followups=followup.worklist(user, *scope_filter(user)),
+                followup_upcoming=followup.upcoming_count() if user["role"] in ("Navigator", "CMO") else 0,
                 pending_accounts=len(accounts.pending_requests()) if user["role"] == "Admin" else 0)
 
 
@@ -277,7 +286,8 @@ def loop_page(request: Request, patient_id: str, user: dict = Depends(require_ro
     ensure_patient_access(user, patient_id)
     care_loop.check_sla()
     return page(request, "loop.html", user, **care_loop.get_loop(patient_id),
-                can={step: user["role"] in roles for step, roles in care_loop.STEP_ROLES.items()})
+                can={step: user["role"] in roles for step, roles in care_loop.STEP_ROLES.items()},
+                my_close_reasons=[r for r, roles in care_loop.CLOSE_REASONS.items() if user["role"] in roles])
 
 
 @app.get("/api/alerts")
@@ -318,6 +328,64 @@ def step_user(step: str):
     return checker
 
 
+# ---------- Imaging follow-up loop (BI-RADS 0/3, annual, dense, high risk) ----------
+
+def followup_user(step: str):
+    def checker(patient_id: str, user: dict = Depends(require_role(*followup.STEP_ROLES[step]))) -> dict:
+        ensure_patient_access(user, patient_id)
+        return user
+    return checker
+
+
+@app.get("/followup/{patient_id}", response_class=HTMLResponse)
+def followup_page(request: Request, patient_id: str, user: dict = Depends(require_role(*STAFF_ROLES))):
+    if user["role"] == "Admin":
+        raise HTTPException(status_code=403, detail="Not allowed for this role")
+    ensure_patient_access(user, patient_id)
+    care_loop.check_sla()
+    return page(request, "followup.html", user, **followup.get_followup(patient_id),
+                can={step: user["role"] in roles for step, roles in followup.STEP_ROLES.items()},
+                my_close_reasons=[r for r, roles in care_loop.CLOSE_REASONS.items() if user["role"] in roles])
+
+
+@app.post("/api/patients/{patient_id}/followup/contact")
+def post_followup_contact(patient_id: str, data: followup.FollowupContactIn,
+                          user: dict = Depends(followup_user("contact"))):
+    return followup.record_contact(patient_id, data, user.get("staff_id"))
+
+
+@app.post("/api/patients/{patient_id}/followup/book")
+def post_followup_book(patient_id: str, data: followup.FollowupBookIn, user: dict = Depends(followup_user("book"))):
+    return followup.book(patient_id, data, user.get("staff_id"))
+
+
+@app.post("/api/patients/{patient_id}/followup/performed")
+def post_followup_performed(patient_id: str, user: dict = Depends(followup_user("performed"))):
+    return followup.performed(patient_id, user.get("staff_id"))
+
+
+@app.post("/api/patients/{patient_id}/followup/report")
+def post_followup_report(patient_id: str, data: followup.FollowupReportIn,
+                         user: dict = Depends(followup_user("report"))):
+    return followup.report(patient_id, data, user.get("staff_id"))
+
+
+@app.post("/api/patients/{patient_id}/followup/close")
+def post_followup_close(patient_id: str, data: followup.FollowupCloseIn, user: dict = Depends(followup_user("close"))):
+    return followup.close(patient_id, data, user)
+
+
+@app.post("/api/patients/{patient_id}/followup/reopen")
+def post_followup_reopen(patient_id: str, data: followup.FollowupReopenIn,
+                         user: dict = Depends(followup_user("reopen"))):
+    return followup.reopen(patient_id, data, user.get("staff_id"))
+
+
+@app.post("/api/me/followup-confirm")
+def confirm_followup(user: dict = Depends(require_role("Patient"))):
+    return followup.patient_confirm(user["patient_id"])
+
+
 @app.post("/api/patients/{patient_id}/contact")
 def post_contact(patient_id: str, data: care_loop.ContactIn, user: dict = Depends(step_user("contact"))):
     return care_loop.record_contact(patient_id, data, user["staff_id"])
@@ -351,7 +419,17 @@ def post_treatment(patient_id: str, data: care_loop.TreatmentIn, user: dict = De
 @app.post("/api/patients/{patient_id}/results-appointment")
 def post_results_appointment(patient_id: str, data: care_loop.ResultsAppointmentIn,
                              user: dict = Depends(step_user("book_results"))):
-    return care_loop.book_results_appointment(patient_id, data, user["staff_id"])
+    return care_loop.book_results_appointment(patient_id, data, user["staff_id"], user["role"])
+
+
+@app.post("/api/patients/{patient_id}/close-loop")
+def post_close_loop(patient_id: str, data: care_loop.CloseLoopIn, user: dict = Depends(step_user("close_loop"))):
+    return care_loop.close_loop(patient_id, data, user)
+
+
+@app.post("/api/patients/{patient_id}/reopen-loop")
+def post_reopen_loop(patient_id: str, data: care_loop.ReopenLoopIn, user: dict = Depends(step_user("reopen_loop"))):
+    return care_loop.reopen_loop(patient_id, data, user.get("staff_id"))
 
 
 @app.post("/api/patients/{patient_id}/result-disclosed")

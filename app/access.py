@@ -16,14 +16,23 @@ def _open_sla(section: int) -> str:
                   AND e.status IN ('Open','Paused'))"""
 
 
+def _followup_step(*steps: int) -> str:
+    """Patients whose imaging follow-up loop is waiting on one of these steps (R1-R4)."""
+    return f"""(SELECT l.patient_id FROM followup_loop l JOIN followup_task t ON t.loop_id = l.loop_id
+                WHERE l.status = 'Open' AND t.completed_at IS NULL AND t.status <> 'Cancelled'
+                  AND t.step IN ({",".join(str(s) for s in steps)}))"""
+
+
 # SQL filter on patient alias "p". :sid is the logged-in user's staff_id.
 ROLE_SCOPE = {
     "Clinician": "p.patient_id IN (SELECT patient_id FROM care_team_assignment WHERE staff_id = :sid)",
-    "Radiologist": "p.patient_id IN (SELECT patient_id FROM imaging_result WHERE radiologist_id = :sid)",
+    "Radiologist": """p.patient_id IN (SELECT patient_id FROM imaging_result WHERE radiologist_id = :sid)
+        OR p.patient_id IN """ + _followup_step(3, 4),
     "Pathologist": """p.patient_id IN (SELECT e.patient_id FROM care_episode e
                                        JOIN biopsy b ON b.episode_id = e.episode_id)""",
-    "Navigator": "p.patient_id IN (SELECT patient_id FROM care_episode WHERE status IN ('Open','Paused'))",
-    "SchedulingManager": _open_sla(2),
+    "Navigator": """p.patient_id IN (SELECT patient_id FROM care_episode WHERE status IN ('Open','Paused'))
+        OR p.patient_id IN (SELECT patient_id FROM followup_loop WHERE status = 'Open')""",
+    "SchedulingManager": _open_sla(2) + " OR p.patient_id IN " + _followup_step(2),
     "LabDirector": _open_sla(3),
     "TumorBoard": _open_sla(4) + """ OR p.patient_id IN
         (SELECT patient_id FROM referral WHERE assigned_to_id = :sid)
@@ -38,7 +47,7 @@ LIST_TITLES = {
     "Clinician": "Patients assigned to you",
     "Radiologist": "Patients with imaging you reported",
     "Pathologist": "Patients with a biopsy on record",
-    "Navigator": "Patients with an open care loop",
+    "Navigator": "Patients with an open care loop or imaging follow-up",
     "SchedulingManager": "Patients waiting for a biopsy booking (S2)",
     "LabDirector": "Biopsies waiting for a pathology report (S3)",
     "TumorBoard": "Urgent BI-RADS 4/5 workups and oncology referrals (S4)",
@@ -76,7 +85,8 @@ def ensure_patient_access(user: dict, patient_id: str) -> None:
 # ---------- The role-filtered patient list (dashboard, API, Care Assistant) ----------
 
 CLINICAL_LIST_FIELDS = ("birads_category", "density", "result_released_at",
-                        "current_lane", "episode_status", "sla_section", "sla_hours_left")
+                        "current_lane", "episode_status", "sla_section", "sla_hours_left",
+                        "fu_status", "fu_due_date", "fu_step", "fu_hours_left")
 
 PATIENT_LIST_SQL = """
     SELECT p.patient_id,
@@ -89,6 +99,7 @@ PATIENT_LIST_SQL = """
            ep.status AS episode_status,
            sla.section AS sla_section,
            sla.hours_left AS sla_hours_left,
+           fu.status AS fu_status, fu.due_date AS fu_due_date, fu.step AS fu_step, fu.hours_left AS fu_hours_left,
            (SELECT COUNT(*) FROM vw_data_quality_flags f WHERE f.patient_id = p.patient_id) AS flag_count
     FROM patient p
     LEFT JOIN lane_assignment la ON la.patient_id = p.patient_id AND la.is_current
@@ -106,6 +117,14 @@ PATIENT_LIST_SQL = """
         WHERE t.episode_id = ep.episode_id AND t.completed_at IS NULL AND t.status <> 'Cancelled'
         ORDER BY t.due_at LIMIT 1
     ) sla ON TRUE
+    LEFT JOIN LATERAL (                      -- imaging follow-up loop, if one is scheduled or open
+        SELECT l.status, l.due_date, t.step,
+               FLOOR(EXTRACT(EPOCH FROM (t.due_at - now())) / 3600)::INT AS hours_left
+        FROM followup_loop l
+        LEFT JOIN LATERAL (SELECT * FROM followup_task t WHERE t.loop_id = l.loop_id AND t.completed_at IS NULL
+                           AND t.status <> 'Cancelled' ORDER BY t.due_at LIMIT 1) t ON TRUE
+        WHERE l.patient_id = p.patient_id AND l.status IN ('Scheduled','Open') LIMIT 1
+    ) fu ON TRUE
     WHERE {scope}
     ORDER BY p.patient_id
 """

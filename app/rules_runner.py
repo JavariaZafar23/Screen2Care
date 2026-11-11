@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import text
 
+from app import followup
 from app.care_loop import open_episode
 from app.database import engine
 from app.rules import Inputs, evaluate
@@ -60,6 +61,13 @@ def run_engine(patient_id: str) -> dict:
             VALUES (:pid, :lane, :due, :reason, 'Engine')
         """), {"pid": patient_id, "lane": d.lane, "due": d.next_due, "reason": d.reason})
 
+        latest_imaging = conn.execute(text("""
+            SELECT imaging_id FROM imaging_result WHERE patient_id = :pid
+            ORDER BY result_released_at DESC, birads_category DESC LIMIT 1
+        """), {"pid": patient_id}).scalar()
+        # Imaging follow-up loop (BI-RADS 0/3, annual, dense, high risk). Runs first so a
+        # BI-RADS 4/5 result closes it before the care loop opens.
+        followup.sync(conn, patient_id, d.lane, d.next_due, latest_imaging)
         if d.lane == "UrgentWorkup":
             open_episode(conn, patient_id)   # starts S1 and sends the result SMS
 

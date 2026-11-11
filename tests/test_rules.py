@@ -91,8 +91,14 @@ def sql(q, **p):
 
 def cleanup():
     for q in [
+        "DELETE FROM event_log WHERE patient_id = :p",
         "DELETE FROM lane_assignment WHERE patient_id = :p",
         "DELETE FROM geriatric_assessment WHERE encounter_id IN (SELECT encounter_id FROM encounter WHERE patient_id = :p)",
+        "DELETE FROM followup_alert WHERE patient_id = :p",
+        "DELETE FROM followup_task WHERE loop_id IN (SELECT loop_id FROM followup_loop WHERE patient_id = :p)",
+        "DELETE FROM followup_contact WHERE loop_id IN (SELECT loop_id FROM followup_loop WHERE patient_id = :p)",
+        "DELETE FROM followup_appointment WHERE loop_id IN (SELECT loop_id FROM followup_loop WHERE patient_id = :p)",
+        "DELETE FROM followup_loop WHERE patient_id = :p",
         "DELETE FROM imaging_result WHERE patient_id = :p",
         "DELETE FROM encounter WHERE patient_id = :p",
         "DELETE FROM patient_risk_profile WHERE patient_id = :p",
@@ -155,6 +161,11 @@ def remove_intake_patient():
               f"DELETE FROM geriatric_assessment WHERE encounter_id IN {enc}",
               f"DELETE FROM clinical_breast_exam WHERE encounter_id IN {enc}",
               f"DELETE FROM clinical_note WHERE encounter_id IN {enc}",
+              "DELETE FROM followup_alert WHERE patient_id = :p",
+              "DELETE FROM followup_task WHERE loop_id IN (SELECT loop_id FROM followup_loop WHERE patient_id = :p)",
+              "DELETE FROM followup_contact WHERE loop_id IN (SELECT loop_id FROM followup_loop WHERE patient_id = :p)",
+              "DELETE FROM followup_appointment WHERE loop_id IN (SELECT loop_id FROM followup_loop WHERE patient_id = :p)",
+              "DELETE FROM followup_loop WHERE patient_id = :p",
               "DELETE FROM imaging_result WHERE patient_id = :p",
               "DELETE FROM encounter WHERE patient_id = :p",
               "DELETE FROM family_history WHERE patient_id = :p",

@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% from "_ui.html" import icon, dur %}
+{% block title %}Imaging follow-up · {{ patient.full_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="crumb" href="/">{{ icon('back') }} Dashboard</a>
+    <h1>{{ patient.full_name }}</h1>
+    <p><span class="mono">{{ patient.patient_id }}</span>
+      {% if loop %} · imaging follow-up{% if lane_info %}: {{ lane_info.imaging }}{% endif %} · due {{ loop.due_date.strftime('%d %b %Y') }}{% endif %}</p>
+  </div>
+  <div class="actions-row">
+    {% if loop %}<span class="pill {{ 'pill-info' if loop.status in ('Scheduled', 'Open') else ('pill-warn' if loop.status not in ('Closed-Completed', 'Closed-Escalated') else 'pill-ok') }}">{{ loop.status }}</span>{% endif %}
+    <a class="btn btn-secondary" href="/loop/{{ patient.patient_id }}">{{ icon('loop') }} Care loop (BI-RADS 4/5)</a>
+  </div>
+</div>
+
+{% if not loop %}
+<section class="card">
+  <div class="empty-state">{{ icon('calendar') }}<br>No imaging follow-up for this patient. One is scheduled automatically when the rules engine sets a BI-RADS 0 recall, a BI-RADS 3 six-month scan, or annual, dense or high-risk screening.</div>
+</section>
+{% else %}
+<div class="grid-2" style="align-items:start">
+  <section class="card" aria-labelledby="fu-h">
+    <div class="card-head"><h2 id="fu-h">{{ icon('clock') }} Follow-up timeline</h2></div>
+    <div class="card-pad" style="padding-top:.4rem;padding-bottom:.4rem">
+      {% if loop.status == 'Scheduled' %}
+      <p class="notice" style="margin:.8rem 0">Scheduled. The reminder goes out {{ lane_info.lead if lane_info else 30 }} days before the due date, and the clocks start then.</p>
+      {% endif %}
+      <ol class="sla-track">
+        {% for s in steps %}
+        {% set st = s.status %}
+        <li class="sla-step st-{{ st | lower | replace(' ', '-') }}">
+          <span class="sla-dot">{% if st in ('Met', 'Met late') %}{{ icon('check') }}{% else %}R{{ s.n }}{% endif %}</span>
+          <div>
+            <h3>{{ s.name }}</h3>
+            <p>Escalates to {{ role_labels.get(s.role, s.role) }}</p>
+            {% if s.task %}<p>Due {{ s.task.due_at.strftime('%d %b %H:%M') }}{% if s.task.completed_at %} · done {{ s.task.completed_at.strftime('%d %b %H:%M') }}{% endif %}</p>{% endif %}
+          </div>
+          <div>
+            {% if st == 'Breached' %}<span class="pill pill-crit">{{ dur(s.hours_left) }} overdue</span>
+            {% elif st == 'Running' %}<span class="pill pill-info">{{ dur(s.hours_left) }} left</span>
+            {% elif st == 'Met' %}<span class="pill pill-ok">Met</span>
+            {% elif st == 'Met late' %}<span class="pill pill-warn">Met late</span>
+            {% else %}<span class="pill">{{ st }}</span>{% endif %}
+          </div>
+        </li>
+        {% endfor %}
+      </ol>
+    </div>
+  </section>
+
+  <div class="stack">
+    <div id="form_error" class="notice notice-error" role="alert" hidden></div>
+    {% if loop.status == 'Open' %}
+    {% set r1 = steps[0].task and not steps[0].task.completed_at %}
+    {% set booked = appointment and appointment.status == 'Booked' %}
+    {% set done = appointment and appointment.status == 'Performed' %}
+    <section class="card" aria-labelledby="next-h">
+      <div class="card-head"><h2 id="next-h">{{ icon('activity') }} Next steps</h2></div>
+      <div class="card-pad">
+        {% set shown = namespace(any=false) %}
+
+        {% if not booked and not done and can.contact %}{% set shown.any = true %}
+        <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/followup/contact">
+          <h3>R1 · Contact the patient about the scan</h3>
+          <div class="row">
+            <label class="f-label">Channel
+              <select name="channel"><option>Phone</option><option>SMS</option><option value="InPerson">In person</option><option>Email</option><option>Letter</option></select>
+            </label>
+            <label class="f-label">Outcome
+              <select name="outcome"><option>Reached</option><option value="NoAnswer">No answer</option><option value="WrongNumber">Wrong number</option><option>Declined</option></select>
+            </label>
+          </div>
+          <p class="muted small" style="margin:0">“Reached” counts as the patient confirming and starts the booking step.</p>
+          <div><button class="btn" type="submit">Save contact</button></div>
+        </form>
+        {% endif %}
+
+        {% if not done and can.book %}{% set shown.any = true %}
+        <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/followup/book">
+          <h3>R2 · {{ 'Move the scan appointment' if booked else 'Book the scan' }}</h3>
+          <div class="row">
+            <label class="f-label">Scan
+              <select name="modality"><option>Mammogram</option><option value="DBT">DBT (3D mammogram)</option><option>Ultrasound</option><option>MRI</option></select>
+            </label>
+            <label class="f-label">Appointment <input name="scheduled_for" type="datetime-local" required></label>
+          </div>
+          <div><button class="btn" type="submit">{{ 'Move appointment' if booked else 'Book scan' }}</button></div>
+        </form>
+        {% endif %}
+
+        {% if booked and can.performed %}{% set shown.any = true %}
+        <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/followup/performed">
+          <h3>R3 · Scan done</h3>
+          <p class="muted small" style="margin:0">{{ appointment.modality }} booked for {{ appointment.scheduled_for.strftime('%a %d %b %Y %H:%M') }}.</p>
+          <div><button class="btn" type="submit">Mark scan as done</button></div>
+        </form>
+        {% endif %}
+
+        {% if done and can.report %}{% set shown.any = true %}
+        <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/followup/report">
+          <h3>R4 · Record the result</h3>
+          <div class="row">
+            <label class="f-label">BI-RADS
+              <select name="birads" data-int required>
+                <option value="1">1 Negative</option><option value="2">2 Benign</option><option value="3">3 Probably benign</option>
+                <option value="0">0 Incomplete</option><option value="4">4 Suspicious</option><option value="5">5 Highly suggestive</option><option value="6">6 Known cancer</option>
+              </select>
+            </label>
+            {% if appointment.modality in ('Mammogram', 'DBT') %}
+            <label class="f-label">Density
+              <select name="density"><option value="">Not recorded</option><option>A</option><option>B</option><option>C</option><option>D</option></select>
+            </label>
+            {% endif %}
+          </div>
+          <label class="f-label">Report summary <textarea name="report_text" rows="2" maxlength="2000"></textarea></label>
+          <p class="muted small" style="margin:0">BI-RADS 4 or 5 closes this follow-up and opens the care loop (biopsy). Any other result schedules the next follow-up.</p>
+          <div><button class="btn" type="submit">Save result</button></div>
+        </form>
+        {% endif %}
+
+        {% if not shown.any %}
+        <p class="muted" style="margin:0">Nothing for your role to do at this step.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    {% if can.close and my_close_reasons %}
+    <section class="card" aria-labelledby="close-h">
+      <div class="card-head"><h2 id="close-h">{{ icon('alert') }} Close this follow-up</h2></div>
+      <div class="card-pad">
+        <p class="muted small" style="margin-top:0">Nothing is deleted. The clocks stop and the record stays.</p>
+        <p class="small">Unanswered contact attempts recorded: <strong>{{ failed_contacts }}</strong>.
+          After closing, the patient leaves your list. The CMO keeps the record and can restart the loop if the patient comes back.</p>
+        <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/followup/close" data-confirm="Close this imaging follow-up? The clocks will stop.">
+          <label class="f-label">Reason
+            <select name="reason" required>{% for r in my_close_reasons %}<option value="{{ r }}">{{ close_labels[r] }}</option>{% endfor %}</select>
+          </label>
+          <label class="f-label">Note <span class="muted small">(required)</span>
+            <textarea name="note" rows="2" minlength="10" maxlength="400" required></textarea>
+          </label>
+          <div><button class="btn btn-danger" type="submit">Close follow-up</button></div>
+        </form>
+      </div>
+    </section>
+    {% endif %}
+    {% elif loop.status != 'Scheduled' %}
+    <section class="card card-pad">
+      <p style="margin-top:0"><strong>{{ loop.status }}</strong>{% if loop.closed_at %} · {{ loop.closed_at.strftime('%d %b %Y %H:%M') }}{% endif %}{% if loop.closed_by_name %} · {{ loop.closed_by_name }}{% endif %}</p>
+      {% if loop.status == 'Closed-Escalated' %}<p class="small">The follow-up scan showed BI-RADS {{ result.birads_category if result else '4/5' }}: the patient moved to the <a href="/loop/{{ patient.patient_id }}">care loop</a>.</p>{% endif %}
+      {% if loop.closure_note %}<p class="small">{{ loop.closure_note }}</p>{% endif %}
+      {% if loop.status in reopenable and can.reopen %}
+      <form class="form step-form" data-endpoint="/api/patients/{{ patient.patient_id }}/followup/reopen">
+        <h3>Restart the follow-up</h3>
+        <p class="muted small" style="margin:0">For a patient who has come back. A new follow-up starts with the scan due now, and the reminder goes out at once.</p>
+        <label class="f-label">Note
+          <textarea name="note" rows="2" minlength="10" maxlength="400" required placeholder="e.g. Patient came to the clinic on 12 Nov and wants the scan"></textarea>
+        </label>
+        <div><button class="btn" type="submit">Restart follow-up</button></div>
+      </form>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <section class="card" aria-labelledby="rec-h">
+      <div class="card-head"><h2 id="rec-h">{{ icon('file') }} Record</h2></div>
+      <div class="card-pad">
+        <ul class="record">
+          {% for c in contacts %}
+          <li>{{ icon('phone') }} {{ c.attempted_at.strftime('%d %b %H:%M') }} · {{ c.channel }} · {{ c.outcome or 'reminder sent' }} · <span class="muted">{{ c.by_name or ('patient' if c.channel == 'Portal' else 'system') }}</span></li>
+          {% endfor %}
+          {% if appointment %}<li>{{ icon('calendar') }} {{ appointment.modality }} · {{ appointment.scheduled_for.strftime('%d %b %Y %H:%M') }} · {{ appointment.status }}</li>{% endif %}
+          {% if result %}<li>Result: BI-RADS <strong>{{ result.birads_category }}</strong>{% if result.density %} · density {{ result.density }}{% endif %} · {{ result.result_released_at.strftime('%d %b %Y') }}</li>{% endif %}
+          {% for h in history %}<li class="muted">Earlier follow-up · due {{ h.due_date.strftime('%d %b %Y') }} · {{ h.status }}</li>{% endfor %}
+          {% if not (contacts or appointment or result or history) %}<li class="muted">Nothing recorded yet.</li>{% endif %}
+        </ul>
+      </div>
+    </section>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const errBox = document.getElementById("form_error");
+  document.querySelectorAll("form.step-form").forEach((form) => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (form.dataset.confirm && !confirm(form.dataset.confirm)) return;
+      const body = {};
+      new FormData(form).forEach((v, k) => {
+        if (v === "") return;
+        const el = form.querySelector(`[name="${k}"]`);
+        body[k] = el.hasAttribute("data-int") ? Number(v) : (el.type === "datetime-local" ? new Date(v).toISOString() : v);
+      });
+      const btn = form.querySelector("button[type=submit]");
+      busy(btn, true, "Saving…");
+      const { ok, data } = await postJSON(form.dataset.endpoint, body);
+      if (ok) {
+        if (data && data.after) { location.href = data.after; return; }
+        if (data && data.care_loop_opened) { location.href = "/loop/{{ patient.patient_id }}"; return; }
+        location.reload(); return;
+      }
+      busy(btn, false);
+      errBox.textContent = errorText(data, "Could not save. Check the fields and try again.");
+      errBox.hidden = false;
+    });
+  });
+</script>
+{% endblock %}

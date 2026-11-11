@@ -20,6 +20,23 @@
     </section>
     {% endif %}
 
+    {% if followup %}
+    <section class="card card-pad {{ 'ack-card' if followup.confirm_needed else '' }}" aria-labelledby="fu-h">
+      <p class="eyebrow" id="fu-h">{{ 'Action needed' if followup.confirm_needed else 'Your next scan' }}</p>
+      <h2 style="margin:0 0 .35rem;font-size:1.15rem">{{ followup.imaging }}</h2>
+      {% if followup.appointment and followup.appointment.status == 'Booked' %}
+      <p style="margin:0">Booked: {{ followup.appointment.modality }} on {{ followup.appointment.scheduled_for.strftime('%A %d %B %Y, %H:%M') }}.</p>
+      {% elif followup.appointment %}
+      <p style="margin:0">Your scan is done. Your doctor will go through the result with you.</p>
+      {% else %}
+      <p style="margin:0 0 {{ '1rem' if followup.confirm_needed else '0' }}">Due around {{ followup.due_date.strftime('%d %B %Y') }}. We will contact you to book a time.</p>
+      {% endif %}
+      {% if followup.confirm_needed %}
+      <button class="btn" id="fu_confirm" type="button">{{ icon('check') }} Yes, I will come for this scan</button>
+      {% endif %}
+    </section>
+    {% endif %}
+
     <section class="card card-pad status-card tone-{{ status.tone }}" aria-labelledby="status-h">
       <p class="eyebrow" id="status-h">Your current status</p>
       <h2>{{ status.title }}</h2>
@@ -95,6 +112,11 @@
 {% endblock %}
 {% block scripts %}
 <script>
+  document.getElementById("fu_confirm")?.addEventListener("click", async (e) => {
+    busy(e.currentTarget, true, "Saving…");
+    const { ok } = await postJSON("/api/me/followup-confirm");
+    if (ok) location.reload(); else busy(e.currentTarget, false);
+  });
   document.getElementById("ack")?.addEventListener("click", async (e) => {
     busy(e.currentTarget, true, "Confirming…");
     const { ok } = await postJSON("/api/me/acknowledge");

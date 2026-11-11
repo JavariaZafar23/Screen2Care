@@ -22,6 +22,14 @@
   </div>
 </div>
 
+{% if closed_notice %}
+<div class="notice notice-ok closed-notice" role="status" style="margin-bottom:1.25rem">
+  <strong>{{ closed_notice.full_name }} ({{ closed_notice.patient_id }}) is no longer in the {{ closed_notice.loop_name }}.</strong>
+  Closed as “{{ closed_notice.reason }}”{% if closed_notice.closed_at %} on {{ closed_notice.closed_at.strftime('%d %b %Y %H:%M') }}{% endif %}.
+  {% if user.role == 'CMO' %}The record is in “Loops closed without treatment” below.{% else %}The patient has been removed from your list. The CMO keeps the record and can restart the loop if the patient comes back.{% endif %}
+</div>
+{% endif %}
+
 <section class="stats" aria-label="Summary">
   <div class="card stat">
     <div class="label">{{ 'Registered patients' if user.role == 'Admin' else 'On your list' }}</div>
@@ -109,6 +117,83 @@
 </section>
 {% endif %}
 
+{% if followups or followup_upcoming %}
+<section class="card" aria-labelledby="fu-h" style="margin-bottom:1.5rem">
+  <div class="card-head">
+    <h2 id="fu-h">{{ icon('calendar') }} {{ 'Overdue imaging follow-ups' if user.role == 'CMO' else 'Imaging follow-up (BI-RADS 0/3, annual, high risk)' }}
+      <span class="count {{ 'zero' if not followups else '' }}">{{ followups | length }}</span></h2>
+    {% if followup_upcoming %}<span class="muted small">{{ followup_upcoming }} more scheduled, reminder not sent yet</span>{% endif %}
+  </div>
+  {% if followups %}
+  <ul class="alert-list">
+    {% for f in followups %}
+    <li class="alert-item notify {{ 'unseen' if f.hours_left < 0 else '' }}">
+      <span class="sec">R{{ f.step }}</span>
+      <div>
+        <h3><a href="/followup/{{ f.patient_id }}">{{ f.full_name }}</a> <span class="id mono muted">{{ f.patient_id }}</span></h3>
+        <p>{{ f.step_name }} · {{ f.imaging }}</p>
+        <div class="meta">Scan due {{ f.due_date.strftime('%d %b %Y') }} · {% if f.hours_left < 0 %}<strong style="color:var(--crit)">{{ dur(f.hours_left) }} overdue</strong>{% else %}{{ dur(f.hours_left) }} left{% endif %}</div>
+      </div>
+      <div><a class="btn btn-secondary btn-sm" href="/followup/{{ f.patient_id }}">Open</a></div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">{{ icon('check') }}<br>No imaging follow-up needs you right now.</div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if user.role == 'CMO' %}
+<section class="card" aria-labelledby="closed-h" style="margin-bottom:1.5rem">
+  <div class="card-head">
+    <h2 id="closed-h">{{ icon('file') }} Loops closed without treatment
+      <span class="count {{ 'zero' if not closed_loops else '' }}">{{ closed_loops | length }}</span></h2>
+  </div>
+  {% if closed_loops %}
+  <ul class="alert-list">
+    {% for c in closed_loops %}
+    <li class="alert-item notify">
+      <span class="sec" aria-hidden="true">{{ icon('file') }}</span>
+      <div>
+        {% set href = ('/loop/' if c.kind == 'care' else '/followup/') ~ c.patient_id %}
+        <h3><a href="{{ href }}">{{ c.full_name }}</a> <span class="id mono muted">{{ c.patient_id }}</span></h3>
+        <p><strong>{{ c.status | replace('Closed-', '') | replace('LostToFollowUp', 'Lost to follow-up') }}</strong> · {{ c.what }} · {{ c.failed_contacts }} unanswered contact attempts</p>
+        <p class="small">{{ c.closure_note }}</p>
+        <div class="meta">Closed {{ c.closed_at.strftime('%d %b %Y %H:%M') }}{% if c.closed_by_name %} by {{ c.closed_by_name }} ({{ role_labels.get(c.closed_by_role, c.closed_by_role) }}){% endif %}{% if c.reopened %} · <strong>reopened since</strong>{% endif %}</div>
+      </div>
+      <div><a class="btn btn-secondary btn-sm" href="{{ href }}">{{ 'Review' if c.reopened else 'Review / restart' }}</a></div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="empty-state">{{ icon('check') }}<br>No loops have been closed without treatment.</div>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if referrals_due %}
+<section class="card" aria-labelledby="refer-h" style="margin-bottom:1.5rem">
+  <div class="card-head">
+    <h2 id="refer-h">{{ icon('activity') }} Malignant results: refer to an oncologist
+      <span class="count">{{ referrals_due | length }}</span></h2>
+  </div>
+  <ul class="alert-list">
+    {% for r in referrals_due %}
+    <li class="alert-item notify unseen">
+      <span class="sec">S4</span>
+      <div>
+        <h3><a href="/loop/{{ r.patient_id }}">{{ r.full_name }}</a> <span class="id mono muted">{{ r.patient_id }}</span></h3>
+        <p>Pathology: <strong>Malignant</strong>{% if r.histology %} · {{ r.histology }}{% endif %}{% if r.reported_at %} · reported {{ r.reported_at.strftime('%d %b %Y') }}{% endif %}</p>
+        <div class="meta">{% if r.hours_left is not none and r.hours_left < 0 %}<strong style="color:var(--crit)">{{ dur(r.hours_left) }} overdue</strong>{% elif r.hours_left is not none %}{{ dur(r.hours_left) }} left to refer{% endif %}</div>
+      </div>
+      <div><a class="btn btn-sm" href="/loop/{{ r.patient_id }}">Refer</a></div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
 {% if results_due %}
 <section class="card" aria-labelledby="results-h" style="margin-bottom:1.5rem">
   <div class="card-head">
@@ -121,7 +206,7 @@
       <span class="sec" aria-hidden="true">{{ icon('file') }}</span>
       <div>
         <h3><a href="/loop/{{ r.patient_id }}">{{ r.full_name }}</a> <span class="id mono muted">{{ r.patient_id }}</span></h3>
-        <p>Report filed {{ r.reported_at.strftime('%d %b %Y') }}. The patient can see it is ready, but not the result.</p>
+        <p><span class="pill {{ 'pill-crit' if r.diagnosis == 'Malignant' else 'pill-ok' }}">{{ r.diagnosis }}</span> Report filed {{ r.reported_at.strftime('%d %b %Y') }}. The patient can see it is ready, but not the result.</p>
         <div class="meta">{% if r.scheduled_for %}Appointment with {{ r.doctor }} · {{ r.scheduled_for.strftime('%a %d %b %H:%M') }}{% else %}<strong>No appointment booked yet</strong>{% endif %}</div>
       </div>
       <div><a class="btn btn-secondary btn-sm" href="/loop/{{ r.patient_id }}">{{ 'Open' if r.scheduled_for else 'Book' }}</a></div>
@@ -196,6 +281,10 @@
               {% if p.sla_hours_left < 0 %}<span class="pill pill-crit">S{{ p.sla_section }} · {{ dur(p.sla_hours_left) }} overdue</span>
               {% else %}<span class="pill pill-info">S{{ p.sla_section }} · {{ dur(p.sla_hours_left) }} left</span>{% endif %}
             {% elif p.episode_status %}<span class="pill">{{ p.episode_status }}</span>
+            {% elif p.fu_status == 'Open' and p.fu_step %}
+              {% if p.fu_hours_left < 0 %}<span class="pill pill-crit">R{{ p.fu_step }} · {{ dur(p.fu_hours_left) }} overdue</span>
+              {% else %}<span class="pill pill-info">R{{ p.fu_step }} · {{ dur(p.fu_hours_left) }} left</span>{% endif %}
+            {% elif p.fu_status %}<span class="pill pill-plain">Scan due {{ p.fu_due_date.strftime('%d %b %Y') }}</span>
             {% else %}<span class="muted">—</span>{% endif %}
           </td>
           {% endif %}
@@ -203,6 +292,7 @@
           {% if clinical %}
           <td style="text-align:right;white-space:nowrap">
             {% if user.role == 'Clinician' %}<a class="btn btn-secondary btn-sm" href="/plan/{{ p.patient_id }}">Plan</a>{% endif %}
+            {% if p.fu_status %}<a class="btn btn-ghost btn-sm" href="/followup/{{ p.patient_id }}">Follow-up</a>{% endif %}
             <a class="btn btn-ghost btn-sm" href="/loop/{{ p.patient_id }}">Care loop</a>
           </td>
           {% endif %}

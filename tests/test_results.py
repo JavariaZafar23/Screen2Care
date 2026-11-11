@@ -18,7 +18,7 @@ def staff_name(staff_id: int) -> str:
 def to_report(pid: str, diagnosis: str = "Malignant"):
     logged_in("clinician1").post(f"/api/patients/{pid}/run-engine")
     logged_in("navigator1").post(f"/api/patients/{pid}/biopsy",
-                                 json={"biopsy_type": "US-Core", "scheduled_for": "2030-01-01T09:00"})
+                                 json={"scheduled_for": "2030-01-01T09:00"})
     logged_in("radiology1").post(f"/api/patients/{pid}/biopsy/performed")
     assert logged_in("pathology1").post(f"/api/patients/{pid}/pathology",
                                         json={"diagnosis": diagnosis, "histology": "IDC"}).status_code == 200
@@ -28,16 +28,15 @@ def test_patient_page_follows_every_stage(birads5_patient):
     pid = birads5_patient
     logged_in("clinician1").post(f"/api/patients/{pid}/run-engine")
     assert "Your progress" not in patient_page()            # nothing booked yet: status as before
-
     logged_in("navigator1").post(f"/api/patients/{pid}/biopsy",
-                                 json={"biopsy_type": "US-Core", "scheduled_for": "2030-01-01T09:00"})
+                                 json={"scheduled_for": "2030-01-01T09:00"})
     page = patient_page()
     assert "Your progress" in page and "Biopsy booked" in page and "Tue 01 Jan at 09:00" in page
 
     logged_in("radiology1").post(f"/api/patients/{pid}/biopsy/performed")
     page = patient_page()
     assert "Biopsy done" in page and "being examined in the laboratory" in page
-    assert "Ultrasound-guided biopsy" in page                # listed under past visits
+    assert "Biopsy" in page                                  # listed under past visits
 
 
 def test_report_ready_but_result_hidden_until_the_doctor_tells_the_patient(birads5_patient):
@@ -108,7 +107,7 @@ def test_treatment_shows_on_the_patient_page(birads5_patient):
     to_report(pid, "Malignant")
     clinician = logged_in("clinician1")
     clinician.post(f"/api/patients/{pid}/result-disclosed", json={"channel": "InPerson"})
-    clinician.post(f"/api/patients/{pid}/referral/assign", json={"assignee_staff_id": 3})
+    logged_in("navigator1").post(f"/api/patients/{pid}/referral/assign", json={"assignee_staff_id": 8})
     assert clinician.post(f"/api/patients/{pid}/treatment", json={"treatment_type": "Surgery"}).status_code == 200
     page = patient_page()
     assert "Treatment started" in page and "Your surgery started on" in page

@@ -59,15 +59,18 @@ def _fmt(ts) -> str:
     return ts.strftime("%d %b %Y")
 
 
+CLOSED_WITHOUT_TREATMENT = ("Closed-LostToFollowUp", "Closed-Declined", "Closed-Transferred", "Closed-Deceased")
+
+
 def _journey(conn, pid) -> Optional[dict]:
     """Where the patient is in the care loop, worded for the patient. None before a biopsy is booked
     (until then the status comes from the clinician's released plan, as before)."""
     ep = conn.execute(text("""
-        SELECT episode_id, opened_at FROM care_episode WHERE patient_id = :p
+        SELECT episode_id, opened_at, status FROM care_episode WHERE patient_id = :p
         ORDER BY opened_at DESC, episode_id DESC LIMIT 1
     """), {"p": pid}).mappings().first()
-    if ep is None:
-        return None
+    if ep is None or ep["status"] in CLOSED_WITHOUT_TREATMENT:
+        return None   # loop closed with a reason: the page goes back to the released plan
     e = {"e": ep["episode_id"]}
     biopsy = conn.execute(text("""
         SELECT biopsy_id, biopsy_type, status, scheduled_for, performed_at FROM biopsy
